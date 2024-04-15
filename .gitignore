@@ -206,3 +206,7 @@ __pycache__/
 
 models/RealESR*
 *.safetensors
+
+# my development
+local/
+outputs/
