@@ -236,7 +236,8 @@ class StreamUNetControlDiffusion:
             do_classifier_free_guidance=do_classifier_free_guidance,
             negative_prompt=negative_prompt,
         )
-        self.prompt_embeds = encoder_output[0].repeat(self.batch_size, 1, 1)
+        #self.prompt_embeds = encoder_output[0].repeat(self.batch_size, 1, 1)
+        self.prompt_embeds = encoder_output[0].repeat(self.denoising_steps_num, 1, 1)
 
         if self.use_denoising_batch and self.cfg_type == "full":
             uncond_prompt_embeds = encoder_output[1].repeat(self.batch_size, 1, 1)
@@ -293,6 +294,16 @@ class StreamUNetControlDiffusion:
             .view(len(self.t_list), 1, 1, 1)
             .to(dtype=self.dtype, device=self.device)
         )
+        self.c_skip = torch.repeat_interleave(
+            self.c_skip,
+            repeats=self.frame_bff_size if self.use_denoising_batch else 1,
+            dim=0,
+        )
+        self.c_out = torch.repeat_interleave(
+            self.c_out,
+            repeats=self.frame_bff_size if self.use_denoising_batch else 1,
+            dim=0,
+        )
 
         alpha_prod_t_sqrt_list = []
         beta_prod_t_sqrt_list = []
@@ -333,7 +344,7 @@ class StreamUNetControlDiffusion:
         #self.prompt_embeds = encoder_output[0].repeat(self.batch_size, 1, 1)
         #self.prompt_embeds[self.prompt_update_idx % self.batch_size] = encoder_output[0].repeat(1, 1, 1)
         #self.prompt_update_idx += 1
-        self.prompt_embeds = torch.cat((encoder_output[0], self.prompt_embeds[:-1]), dim=0)
+        self.prompt_embeds = torch.cat((encoder_output[0], self.prompt_embeds[:-self.frame_bff_size]), dim=0)
 
     def add_noise(
         self,
@@ -476,7 +487,7 @@ class StreamUNetControlDiffusion:
             if self.denoising_steps_num > 1:
                 x_t_latent = torch.cat((x_t_latent, prev_latent_batch), dim=0)
                 self.stock_noise = torch.cat(
-                    (self.init_noise[0:1], self.stock_noise[:-1]), dim=0
+                    (self.init_noise[0:self.frame_bff_size], self.stock_noise[:-self.frame_bff_size]), dim=0
                 )
                 image = torch.cat((image, prev_image), dim=0)
             
@@ -487,17 +498,17 @@ class StreamUNetControlDiffusion:
 
             # update buffer
             if self.denoising_steps_num > 1:
-                x_0_pred_out = x_0_pred_batch[-1].unsqueeze(0)
+                x_0_pred_out = x_0_pred_batch[-self.frame_bff_size:]
                 if self.do_add_noise:
                     self.x_t_latent_buffer = (
-                        self.alpha_prod_t_sqrt[1:] * x_0_pred_batch[:-1]
-                        + self.beta_prod_t_sqrt[1:] * self.init_noise[1:]
+                        self.alpha_prod_t_sqrt[self.frame_bff_size:] * x_0_pred_batch[:-self.frame_bff_size]
+                        + self.beta_prod_t_sqrt[self.frame_bff_size:] * self.init_noise[self.frame_bff_size:]
                     )
                 else:
                     self.x_t_latent_buffer = (
-                        self.alpha_prod_t_sqrt[1:] * x_0_pred_batch[:-1]
+                        self.alpha_prod_t_sqrt[self.frame_bff_size:] * x_0_pred_batch[:-self.frame_bff_size]
                     )
-                self.control_x_buffer = image[:-1]
+                self.control_x_buffer = image[:-self.frame_bff_size]
             else:
                 x_0_pred_out = x_0_pred_batch
                 self.x_t_latent_buffer = None
@@ -534,6 +545,12 @@ class StreamUNetControlDiffusion:
         image: Union[torch.Tensor, PIL.Image.Image, List[PIL.Image.Image]],
     ) -> torch.Tensor:
         assert image is not None
+        if isinstance(image, torch.Tensor) or isinstance(image, list):
+            assert len(image) == self.frame_bff_size
+        elif isinstance(image, PIL.Image.Image):
+            assert self.frame_bff_size == 1
+        else:
+            raise ValueError("Invalid input type")
 
         start = torch.cuda.Event(enable_timing=True)
         end = torch.cuda.Event(enable_timing=True)

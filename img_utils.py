@@ -129,7 +129,7 @@ def get_color(image, resize_factor=64):
     return color
 
 
-def downsample(x, scale_factor=2):
+def downsample(x, size):
     x = x.convert("RGB")
-    W, H = x.size
-    return x.resize((W // scale_factor, H // scale_factor), resample=Image.LANCZOS)
+    W, H = size
+    return x.resize((W, H), resample=Image.LANCZOS)
