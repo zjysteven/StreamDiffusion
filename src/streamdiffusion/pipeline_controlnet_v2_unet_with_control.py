@@ -37,7 +37,7 @@ class UNet2DConditionControlNetModel(torch.nn.Module):
             down_sample * conditioning_scale
             for down_sample in down_samples
         ]
-        mid_block_res_sample = conditioning_scale * mid_sample\
+        mid_block_res_sample = conditioning_scale * mid_sample
         
         noise_pred = self.unet(
             sample,
@@ -111,9 +111,10 @@ class StreamUNetControlDiffusion:
         self.prev_image_result = None
 
         self.pipe = pipe
-        self.image_processor = VaeImageProcessor(pipe.vae_scale_factor)
+        self.image_processor = VaeImageProcessor(pipe.vae_scale_factor, do_convert_rgb=True)
 
         self.scheduler = LCMScheduler.from_config(self.pipe.scheduler.config)
+        self.pipe.scheduler = self.scheduler
         self.text_encoder = pipe.text_encoder
         self.unet = UNet2DConditionControlNetModel(
             pipe.unet, pipe.controlnet
