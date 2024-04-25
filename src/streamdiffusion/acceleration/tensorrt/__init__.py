@@ -29,7 +29,6 @@ def compile_vae_encoder(
     onnx_path: str,
     onnx_opt_path: str,
     engine_path: str,
-    opt_batch_size: int = 1,
     engine_build_options: dict = {},
 ):
     builder = EngineBuilder(model_data, vae, device=torch.device("cuda"))
@@ -37,7 +36,6 @@ def compile_vae_encoder(
         onnx_path,
         onnx_opt_path,
         engine_path,
-        opt_batch_size=opt_batch_size,
         **engine_build_options,
     )
 
@@ -48,7 +46,6 @@ def compile_vae_decoder(
     onnx_path: str,
     onnx_opt_path: str,
     engine_path: str,
-    opt_batch_size: int = 1,
     engine_build_options: dict = {},
 ):
     vae = vae.to(torch.device("cuda"))
@@ -57,7 +54,6 @@ def compile_vae_decoder(
         onnx_path,
         onnx_opt_path,
         engine_path,
-        opt_batch_size=opt_batch_size,
         **engine_build_options,
     )
 
@@ -68,7 +64,6 @@ def compile_unet(
     onnx_path: str,
     onnx_opt_path: str,
     engine_path: str,
-    opt_batch_size: int = 1,
     engine_build_options: dict = {},
 ):
     unet = unet.to(torch.device("cuda"), dtype=torch.float16)
@@ -77,7 +72,6 @@ def compile_unet(
         onnx_path,
         onnx_opt_path,
         engine_path,
-        opt_batch_size=opt_batch_size,
         **engine_build_options,
     )
 
@@ -140,7 +134,7 @@ def accelerate_with_tensorrt(
             create_onnx_path("unet", onnx_dir, opt=False),
             create_onnx_path("unet", onnx_dir, opt=True),
             unet_engine_path,
-            **engine_build_options,
+            engine_build_options,
         )
     else:
         del unet
@@ -153,7 +147,7 @@ def accelerate_with_tensorrt(
             create_onnx_path("vae_decoder", onnx_dir, opt=False),
             create_onnx_path("vae_decoder", onnx_dir, opt=True),
             vae_decoder_engine_path,
-            **engine_build_options,
+            engine_build_options,
         )
 
     if not os.path.exists(vae_encoder_engine_path):
@@ -164,7 +158,7 @@ def accelerate_with_tensorrt(
             create_onnx_path("vae_encoder", onnx_dir, opt=False),
             create_onnx_path("vae_encoder", onnx_dir, opt=True),
             vae_encoder_engine_path,
-            **engine_build_options,
+            engine_build_options,
         )
 
     del vae
@@ -246,7 +240,7 @@ def accelerate_with_tensorrt_unetcontrol(
             create_onnx_path("unet", onnx_dir, opt=False),
             create_onnx_path("unet", onnx_dir, opt=True),
             unet_engine_path,
-            **engine_build_options,
+            engine_build_options=engine_build_options
         )
     else:
         del unet
@@ -259,7 +253,7 @@ def accelerate_with_tensorrt_unetcontrol(
             create_onnx_path("vae_decoder", onnx_dir, opt=False),
             create_onnx_path("vae_decoder", onnx_dir, opt=True),
             vae_decoder_engine_path,
-            **engine_build_options,
+            engine_build_options=engine_build_options
         )
 
     if not os.path.exists(vae_encoder_engine_path):
@@ -270,7 +264,7 @@ def accelerate_with_tensorrt_unetcontrol(
             create_onnx_path("vae_encoder", onnx_dir, opt=False),
             create_onnx_path("vae_encoder", onnx_dir, opt=True),
             vae_encoder_engine_path,
-            **engine_build_options,
+            engine_build_options=engine_build_options
         )
 
     del vae
