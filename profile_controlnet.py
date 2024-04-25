@@ -27,20 +27,28 @@ parser.add_argument('--cfg_type', type=str, choices=['none', 'self', 'initialize
 parser.add_argument('--size', type=int, default=512)
 parser.add_argument('--cond_size', type=int, default=64)
 parser.add_argument('--frame_bff_size', type=int, default=1)
+parser.add_argument('--num_images', type=int, default=50000)
+parser.add_argument(
+    '--lcm_id', type=str, default='1e-6',
+    choices=[
+        '1e-6', '5e-6', '1e-5', '5e-5', '1e-4'
+        '1e-6-cfg7.5', '5e-6-cfg7.5', '1e-5-cfg7.5', '5e-5-cfg7.5', '1e-4-cfg7.5'      
+    ]                    
+)
+parser.add_argument('--server', type=str, choices=['athena', 'lighthouse'], default='lighthouse')
 args = parser.parse_args()
 
 #################################################################
 # model loading
 controlnet = ControlNetModel.from_pretrained(
-    'lllyasviel/control_v11f1e_sd15_tile', 
+    'lllyasviel/control_v11f1e_sd15_tile' if args.size == 512 else 'zjysteven/control_minisd_tile',
     torch_dtype=torch.float16
 )
 
 pipe = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
-    "runwayml/stable-diffusion-v1-5", 
+    "runwayml/stable-diffusion-v1-5" if args.size == 512 else "lambdalabs/miniSD-diffusers",
     controlnet=controlnet,
     torch_dtype=torch.float16,
-    variant="fp16",
 ).to("cuda")
 
 # Enable acceleration
@@ -61,20 +69,34 @@ stream = StreamUNetControlDiffusion(
 delay = stream.denoising_steps_num
 
 # If the loaded model is not LCM, merge LCM
-stream.load_lcm_lora("latent-consistency/lcm-lora-sdv1-5")
+stream.load_lcm_lora(
+    "latent-consistency/lcm-lora-sdv1-5" if args.size == 512 else f"zjysteven/lcm-lora-miniSD-{args.lcm_id}"
+)
 stream.fuse_lora()
 # Use Tiny VAE for further acceleration
 stream.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd").to(device=pipe.device, dtype=pipe.dtype)
 
 if args.accel == 'trt':
     stream = accelerate_with_tensorrt_unetcontrol(
-        stream, 
-        f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}", 
+        stream,
+        f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}" \
+        if args.size != 256 else \
+        f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}_lcm{args.lcm_id}", 
         max_batch_size=stream.batch_size,
+        engine_build_options={
+            'opt_image_height': args.size,
+            'opt_image_width': args.size, 
+        }
+        # f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}", 
+        # max_batch_size=stream.denoising_steps_num * 16, # max frame bff size is 128 on A100
     )
 
 # data
-with open('/data/coco/annotations/captions_val2017.json', 'r') as f:
+if args.server == 'lighthouse':
+    anno_path = '/home/public/coco-stuff/annotations/captions_val2017.json'
+elif args.server == 'athena':
+    anno_path = '/data/coco/annotations/captions_val2017.json'
+with open(anno_path, 'r') as f:
     annos = json.load(f)
 
 id2img = {}
@@ -87,10 +109,13 @@ img2caps = defaultdict(list)
 for tmp in annos['annotations']:
     img2caps[id2img[tmp['image_id']]].append(tmp['caption'])
 
-num_images = 500
-all_images = os.listdir('/data/coco/val2017')
+if args.server == 'lighthouse':
+    data_path = '/home/public/coco-stuff/images/val2017'
+elif args.server == 'athena':
+    data_path = '/data/coco/val2017'
+all_images = os.listdir(data_path)
 np.random.seed(0)
-selected = np.random.choice(all_images, min(len(all_images), num_images), replace=False).tolist()
+selected = np.random.choice(all_images, min(len(all_images), args.num_images), replace=False).tolist()
 selected = selected + [selected[-1]] * (delay - 1)
 
 save_dir = f'./outputs/controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_accel={args.accel}_framebff{args.frame_bff_size}'
@@ -110,7 +135,7 @@ for i in tqdm(range(num_batches), total=num_batches):
     for filename in filenames:
         prompts.append(f"{img2caps[filename][0]}, realistic, best quality, extremely detailed")
         original = load_image(
-            os.path.join('/data/coco/val2017', filename)
+            os.path.join(data_path, filename)
         ).resize((args.size, args.size))
         cond = downsample(original, (args.cond_size, args.cond_size))
         cond_resized = cond.resize((args.size, args.size))
