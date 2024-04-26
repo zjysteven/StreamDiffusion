@@ -154,7 +154,7 @@ dependencies:
     - nvidia-nvtx-cu12==12.1.105
     - omegaconf==2.4.0.dev3
     - onnx==1.15.0
-    - onnx-graphsurgeon==0.5.2
+    # - onnx-graphsurgeon==0.5.2
     - onnxruntime==1.16.3
     - opencv-python==4.9.0.80
     - opt-einsum==3.3.0
@@ -166,7 +166,7 @@ dependencies:
     - peft==0.10.0
     - pillow==10.3.0
     - pluggy==1.4.0
-    - polygraphy==0.48.1
+    # - polygraphy==0.48.1
     - pooch==1.8.1
     - protobuf==3.20.3
     - psutil==5.9.8
