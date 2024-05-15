@@ -76,22 +76,7 @@ stream.fuse_lora()
 # Use Tiny VAE for further acceleration
 stream.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd").to(device=pipe.device, dtype=pipe.dtype)
 
-if args.accel == 'trt':
-    stream = accelerate_with_tensorrt_unetcontrol(
-        stream,
-        f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}" \
-        if args.size != 256 else \
-        f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}_lcm{args.lcm_id}", 
-        max_batch_size=stream.batch_size,
-        engine_build_options={
-            'opt_image_height': args.size,
-            'opt_image_width': args.size, 
-        }
-        # f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}", 
-        # max_batch_size=stream.denoising_steps_num * 16, # max frame bff size is 128 on A100
-    )
-
-# data
+# Load data
 if args.server == 'lighthouse':
     anno_path = '/home/public/coco-stuff/annotations/captions_val2017.json'
 elif args.server == 'athena':
@@ -118,7 +103,8 @@ np.random.seed(0)
 selected = np.random.choice(all_images, min(len(all_images), args.num_images), replace=False).tolist()
 selected = selected + [selected[-1]] * (delay - 1)
 
-save_dir = f'./outputs/controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_accel={args.accel}_framebff{args.frame_bff_size}'
+#save_dir = f'./outputs/controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_accel={args.accel}_framebff{args.frame_bff_size}'
+save_dir = f'./outputs/controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_accel={args.accel}_quant=INT8_framebff{args.frame_bff_size}'
 os.makedirs(save_dir, exist_ok=True)
 
 input_buffer = []
@@ -127,6 +113,75 @@ img_batch_size = stream.frame_bff_size
 num_batches = len(selected) // img_batch_size
 img_cnt = 0
 negative_prompt = ["monochrome, lowres, bad anatomy, worst quality, low quality, blur, blurred, DOF"] * img_batch_size
+
+if args.accel == 'trt':
+    """
+    Build calibration dictionaries for encoder, unet, and decoder engines.
+    Calibration requires representative data, and the stream has a coupled
+    processing chain of encoder --> unet --> decoder, along with intermediate
+    pre- and post-processing steps. We thus need to recreate this process to
+    produce good representative data.
+
+    NVIDIA documentation indicates that ~500 images are sufficient for calibrating
+    ImageNet classification networks. This is a more difficult scenario, and so
+    we will select 1000 images from the complete set.
+    """
+    enc_calib_list = []
+    unet_calib_list = []
+    dec_calib_list = []
+
+    # Build calibrator dictionaries with real representative data
+    print(f'>>> Generating calibrator dictionaries for {1000} images.')
+    for i in tqdm(range(min(len(selected), 1000))):
+        filename = selected[i]
+
+        prompt = [f'{img2caps[filename][0]}, realistic, best quality, extremely detailed']
+        original = load_image(os.path.join(data_path, filename)).resize((args.size, args.size))
+        cond = downsample(original, (args.cond_size, args.cond_size))
+        cond_resized = cond.resize((args.size, args.size))
+
+        if i == 0:
+            stream.prepare(prompt, negative_prompt, guidance_scale = 1.2)
+        else:
+            stream.update_prompt(prompt)
+
+        # Generate calibration dictionary items for image
+        enc_item, unet_item, dec_item = stream.gen_calib_dict_intermediates(cond_resized)
+
+        # Append to feed dictionary lists
+        enc_calib_list.append(enc_item)
+        unet_calib_list.append(unet_item)
+        dec_calib_list.append(dec_item)
+
+    print(f'>>> Calibrator dictionary generation complete. Building engines...')
+
+    # Calibrator functions
+    def enc_calib_loader():
+        for calib_datum in enc_calib_list:
+            yield calib_datum
+    def unet_calib_loader():
+        for calib_datum in unet_calib_list:
+            yield calib_datum
+    def dec_calib_loader():
+        for calib_datum in dec_calib_list:
+            yield calib_datum
+
+    stream = accelerate_with_tensorrt_unetcontrol(
+        stream,
+        f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}" \
+        if args.size != 256 else \
+        f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}_lcm{args.lcm_id}", 
+        max_batch_size=stream.batch_size,
+        engine_build_options={
+            'opt_image_height': args.size,
+            'opt_image_width': args.size,
+        },
+        enc_calib_loader,
+        None, #unet_calib_loader,
+        None #dec_calib_loader
+        # f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}", 
+        # max_batch_size=stream.denoising_steps_num * 16, # max frame bff size is 128 on A100
+    )
 
 for i in tqdm(range(num_batches), total=num_batches):
     filenames = selected[i*img_batch_size:(i+1)*img_batch_size]
@@ -151,6 +206,8 @@ for i in tqdm(range(num_batches), total=num_batches):
     else:
         stream.update_prompt(prompts)
     
+    # ---- DEBUG ---- TODO
+    #print(f'<< Profile script >> Calling stream()')
     images, _ = stream(cond_buffer[-img_batch_size:])
 
     if i >= delay - 1:

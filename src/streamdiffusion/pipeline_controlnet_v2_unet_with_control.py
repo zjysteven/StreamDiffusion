@@ -124,6 +124,12 @@ class StreamUNetControlDiffusion:
         self.inference_time_ema = 0
         self.prompt_update_idx = 1
 
+        # For collecting calibrator feed dictionaries when using quantization
+        self.save_intermediates = False
+        self.enc_calib_item = None
+        self.unet_calib_item = None
+        self.dec_calib_item = None
+
     def load_lcm_lora(
         self,
         pretrained_model_name_or_path_or_dict: Union[
@@ -397,6 +403,17 @@ class StreamUNetControlDiffusion:
         else:
             x_t_latent_plus_uc = x_t_latent
 
+        # ---- DEBUG ---- TODO
+        #print(f'<< StreamUNetControlDiffusion::unet_step() >> Calling self.unet()')
+        if self.save_intermediates == True:
+            print('>>>>> Saving UNet input as dictionary.')
+            self.unet_calib_item = {
+                "sample": x_t_latent_plus_uc,
+                "timestep": t_list,
+                "encoder_hidden_states": self.prompt_embeds,
+                "image": image,
+            }
+
         model_pred = self.unet(
             x_t_latent_plus_uc,
             t_list,
@@ -464,12 +481,22 @@ class StreamUNetControlDiffusion:
             device=self.device,
             dtype=self.vae.dtype,
         )
+        # ---- DEBUG ---- TODO
+        #print(f'<< StreamUNetControlDiffusion::encode_image() >> Calling self.vae.encode()')
+        if self.save_intermediates == True:
+            print('>>>>> Saving encoder input as dictionary.')
+            self.enc_calib_item = {"images": image_tensors}
         img_latent = retrieve_latents(self.vae.encode(image_tensors), self.generator)
         img_latent = img_latent * self.vae.config.scaling_factor
         x_t_latent = self.add_noise(img_latent, self.init_noise[0], 0)
         return x_t_latent
 
     def decode_image(self, x_0_pred_out: torch.Tensor) -> torch.Tensor:
+        # ---- DEBUG ---- TODO
+        #print(f'<< StreamUNetControlDiffusion::decode_image() >> Calling self.vae.decode()')
+        if self.save_intermediates == True:
+            print('>>>>> Saving decoder input as dictionary.')
+            self.dec_calib_item = {"latent": x_0_pred_out / self.vae.config.scaling_factor}
         output_latent = self.vae.decode(
             x_0_pred_out / self.vae.config.scaling_factor, return_dict=False
         )[0]
@@ -579,6 +606,8 @@ class StreamUNetControlDiffusion:
                 time.sleep(self.inference_time_ema)
                 return self.prev_image_result
 
+        # ---- DEBUG ---- TODO
+        #print(f'<< StreamUNetControlDiffusion::__call__() >> Calling encode --> predict --> decode')
         x_t_latent = self.encode_image(x)
         x_0_pred_out = self.predict_x0_batch(x_t_latent, control_x)
         x_output = self.decode_image(x_0_pred_out)
@@ -589,3 +618,20 @@ class StreamUNetControlDiffusion:
         inference_time = start.elapsed_time(end) / 1000
         self.inference_time_ema = 0.9 * self.inference_time_ema + 0.1 * inference_time
         return x_output, inference_time
+
+    """
+    Generate intermediate model outputs for engine calibration dictionaries.
+
+    Outputs:
+        enc_calib_item - Encoder engine input
+        unet_calib_item - UNet engine input
+        dec_calib_item - Decoder engine input
+    """
+    def gen_calib_dict_intermediates(self, image: Union[torch.Tensor, PIL.Image.Image, List[PIL.Image.Image]]):
+        # Execute a __call__() pass to collect all engine inputs
+        self.save_intermediates = True
+        self.__call__(image)
+        self.save_intermediates = False
+
+        # Return
+        return self.enc_calib_item, self.unet_calib_item, self.dec_calib_item

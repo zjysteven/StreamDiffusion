@@ -20,6 +20,8 @@ class TorchVAEEncoder(torch.nn.Module):
         self.vae = vae
 
     def forward(self, x: torch.Tensor):
+        # ---- DEBUG ---- TODO
+        #print(f'<< TorchVAEEncoder::forward() >> Calling self.vae.encode()')
         return retrieve_latents(self.vae.encode(x))
 
 
@@ -30,8 +32,16 @@ def compile_vae_encoder(
     onnx_opt_path: str,
     engine_path: str,
     engine_build_options: dict = {},
+    int8_calib_loader = None,
+
 ):
     builder = EngineBuilder(model_data, vae, device=torch.device("cuda"))
+
+    if int8_calib_loader is not None:
+        engine_build_options['quant_int8'] = True
+        engine_build_options['quant_int8_calib_loader'] = int8_calib_loader
+        engine_build_options['quant_int8_calib_cache'] = 'vae_enc_calibration.cache'
+
     builder.build(
         onnx_path,
         onnx_opt_path,
@@ -47,9 +57,16 @@ def compile_vae_decoder(
     onnx_opt_path: str,
     engine_path: str,
     engine_build_options: dict = {},
+    int8_calib_loader = None,
 ):
     vae = vae.to(torch.device("cuda"))
     builder = EngineBuilder(model_data, vae, device=torch.device("cuda"))
+
+    if int8_calib_loader is not None:
+        engine_build_options['quant_int8'] = True
+        engine_build_options['quant_int8_calib_loader'] = int8_calib_loader
+        engine_build_options['quant_int8_calib_cache'] = 'vae_dec_calibration.cache'
+
     builder.build(
         onnx_path,
         onnx_opt_path,
@@ -65,9 +82,16 @@ def compile_unet(
     onnx_opt_path: str,
     engine_path: str,
     engine_build_options: dict = {},
+    int8_calib_loader = None,
 ):
     unet = unet.to(torch.device("cuda"), dtype=torch.float16)
     builder = EngineBuilder(model_data, unet, device=torch.device("cuda"))
+
+    if int8_calib_loader is not None:
+        engine_build_options['quant_int8'] = True
+        engine_build_options['quant_int8_calib_loader'] = int8_calib_loader
+        engine_build_options['quant_int8_calib_cache'] = 'unet_calibration.cache'
+
     builder.build(
         onnx_path,
         onnx_opt_path,
@@ -189,6 +213,9 @@ def accelerate_with_tensorrt_unetcontrol(
     min_batch_size: int = 1,
     use_cuda_graph: bool = False,
     engine_build_options: dict = {},
+    encoder_calibration_loader = None,
+    unet_calibration_loader = None,
+    decoder_calibration_loader = None,
 ):
     if "opt_batch_size" not in engine_build_options or engine_build_options["opt_batch_size"] is None:
         engine_build_options["opt_batch_size"] = max_batch_size
@@ -240,7 +267,8 @@ def accelerate_with_tensorrt_unetcontrol(
             create_onnx_path("unet", onnx_dir, opt=False),
             create_onnx_path("unet", onnx_dir, opt=True),
             unet_engine_path,
-            engine_build_options=engine_build_options
+            engine_build_options=engine_build_options,
+            unet_calibration_loader
         )
     else:
         del unet
@@ -253,7 +281,8 @@ def accelerate_with_tensorrt_unetcontrol(
             create_onnx_path("vae_decoder", onnx_dir, opt=False),
             create_onnx_path("vae_decoder", onnx_dir, opt=True),
             vae_decoder_engine_path,
-            engine_build_options=engine_build_options
+            engine_build_options=engine_build_options,
+            decoder_calibration_loader
         )
 
     if not os.path.exists(vae_encoder_engine_path):
@@ -264,7 +293,8 @@ def accelerate_with_tensorrt_unetcontrol(
             create_onnx_path("vae_encoder", onnx_dir, opt=False),
             create_onnx_path("vae_encoder", onnx_dir, opt=True),
             vae_encoder_engine_path,
-            engine_build_options=engine_build_options
+            engine_build_options=engine_build_options,
+            encoder_calibration_loader
         )
 
     del vae

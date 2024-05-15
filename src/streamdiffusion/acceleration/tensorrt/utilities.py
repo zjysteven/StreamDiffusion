@@ -32,6 +32,7 @@ from PIL import Image
 from polygraphy import cuda
 from polygraphy.backend.common import bytes_from_path
 from polygraphy.backend.trt import (
+    Calibrator,
     CreateConfig,
     Profile,
     engine_from_bytes,
@@ -210,6 +211,8 @@ class Engine:
         enable_all_tactics=False,
         timing_cache=None,
         workspace_size=0,
+        int8=False,
+        calibrator=None
     ):
         print(f"Building TensorRT engine for {onnx_path}: {self.engine_path}")
         p = Profile()
@@ -225,13 +228,22 @@ class Engine:
         if not enable_all_tactics:
             config_kwargs["tactic_sources"] = []
 
-        engine = engine_from_network(
-            network_from_onnx_path(onnx_path, flags=[trt.OnnxParserFlag.NATIVE_INSTANCENORM]),
-            config=CreateConfig(
-                fp16=fp16, refittable=enable_refit, profiles=[p], load_timing_cache=timing_cache, **config_kwargs
-            ),
-            save_timing_cache=timing_cache,
-        )
+        if int8 == True:
+            engine = engine_from_network(
+                network_from_onnx_path(onnx_path, flags=[trt.OnnxParserFlag.NATIVE_INSTANCENORM]),
+                config=CreateConfig(
+                    int8=int8, calibrator=calibrator, refittable=enable_refit, profiles=[p], load_timing_cache=timing_cache, **config_kwargs
+                ),
+                save_timing_cache=timing_cache,
+            )
+        else:
+            engine = engine_from_network(
+                network_from_onnx_path(onnx_path, flags=[trt.OnnxParserFlag.NATIVE_INSTANCENORM]),
+                config=CreateConfig(
+                    fp16=fp16, refittable=enable_refit, profiles=[p], load_timing_cache=timing_cache, **config_kwargs
+                ),
+                save_timing_cache=timing_cache,
+            )
         save_engine(engine, path=self.engine_path)
 
     def load(self):
@@ -374,6 +386,9 @@ def build_engine(
     build_dynamic_shape: bool = False,
     build_all_tactics: bool = False,
     build_enable_refit: bool = False,
+    quant_int8: bool = False,
+    quant_int8_calib_loader = None,
+    quant_int8_calib_cache: str = '',
 ):
     _, free_mem, _ = cudart.cudaMemGetInfo()
     GiB = 2**30
@@ -390,14 +405,28 @@ def build_engine(
         static_batch=build_static_batch,
         static_shape=not build_dynamic_shape,
     )
-    engine.build(
-        onnx_opt_path,
-        fp16=True,
-        input_profile=input_profile,
-        enable_refit=build_enable_refit,
-        enable_all_tactics=build_all_tactics,
-        workspace_size=max_workspace_size,
-    )
+
+    if quant_int8 == True:
+        calibrator = Calibrator(data_loader = quant_int8_calib_loader, cache = quant_int8_calib_cache)
+        engine.build(
+            onnx_opt_path,
+            fp16=False,
+            input_profile=input_profile,
+            enable_refit=build_enable_refit,
+            enable_all_tactics=build_all_tactics,
+            workspace_size=max_workspace_size,
+            int8=True,
+            calibrator=calibrator
+        )
+    else:
+        engine.build(
+            onnx_opt_path,
+            fp16=True,
+            input_profile=input_profile,
+            enable_refit=build_enable_refit,
+            enable_all_tactics=build_all_tactics,
+            workspace_size=max_workspace_size,
+        )
 
     return engine
 

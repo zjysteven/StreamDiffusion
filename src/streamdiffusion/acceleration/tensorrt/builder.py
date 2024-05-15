@@ -46,6 +46,9 @@ class EngineBuilder:
         force_engine_build: bool = False,
         force_onnx_export: bool = False,
         force_onnx_optimize: bool = False,
+        quant_int8: bool = False,
+        quant_int8_calib_loader = None,
+        quant_int8_calib_cache: str = '',
     ):
         if not force_onnx_export and os.path.exists(onnx_path):
             print(f"Found cached model: {onnx_path}")
@@ -88,6 +91,9 @@ class EngineBuilder:
                 build_dynamic_shape=build_dynamic_shape,
                 build_all_tactics=build_all_tactics,
                 build_enable_refit=build_enable_refit,
+                quant_int8=quant_int8,
+                quant_int8_calib_loader=quant_int8_calib_loader,
+                quant_int8_calib_cache=quant_int8_calib_cache
             )
 
         gc.collect()

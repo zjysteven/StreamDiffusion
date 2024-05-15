@@ -35,6 +35,13 @@ class UNet2DConditionControlNetModelEngine:
         if timestep.dtype != torch.float32:
             timestep = timestep.float()
 
+        # -- DEBUG -- Print some feed dict information TODO
+        #print('<< UNet2D::__call__() >>')
+        #print(f'\tsample shape: {latent_model_input.shape}')
+        #print(f'\ttimestep shape: {timestep.shape}')
+        #print(f'\tencoder hidden states shape: {encoder_hidden_states.shape}')
+        #print(f'\timage shape: {image.shape}')
+
         self.engine.allocate_buffers(
             shape_dict={
                 "sample": latent_model_input.shape,
@@ -138,6 +145,11 @@ class AutoencoderKLEngine:
         self.decoder.activate()
 
     def encode(self, images: torch.Tensor, **kwargs):
+
+        # -- DEBUG -- Print some feed dict information TODO
+        #print('<< AutoencoderKLEngine::encode() >>')
+        #print(f'\timages shape: {images.shape}')
+
         self.encoder.allocate_buffers(
             shape_dict={
                 "images": images.shape,
@@ -158,6 +170,11 @@ class AutoencoderKLEngine:
         return AutoencoderTinyOutput(latents=latents)
 
     def decode(self, latent: torch.Tensor, **kwargs):
+
+        # -- DEBUG -- Print some feed dict information TODO
+        #print('<< AutoencoderKLEngine::decode() >>')
+        #print(f'\tlatent shape: {latent.shape}')
+
         self.decoder.allocate_buffers(
             shape_dict={
                 "latent": latent.shape,
