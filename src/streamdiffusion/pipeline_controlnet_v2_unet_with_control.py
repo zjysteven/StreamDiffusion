@@ -403,15 +403,12 @@ class StreamUNetControlDiffusion:
         else:
             x_t_latent_plus_uc = x_t_latent
 
-        # ---- DEBUG ---- TODO
-        #print(f'<< StreamUNetControlDiffusion::unet_step() >> Calling self.unet()')
         if self.save_intermediates == True:
-            print('>>>>> Saving UNet input as dictionary.')
             self.unet_calib_item = {
-                "sample": x_t_latent_plus_uc,
-                "timestep": t_list,
-                "encoder_hidden_states": self.prompt_embeds,
-                "image": image,
+                "sample": x_t_latent_plus_uc.to(torch.float32).detach().cpu().numpy(),
+                "timestep": t_list.to(torch.float32).detach().cpu().numpy(),
+                "encoder_hidden_states": self.prompt_embeds.detach().cpu().numpy(),
+                "image": image.to(torch.float32).detach().cpu().numpy(),
             }
 
         model_pred = self.unet(
@@ -481,22 +478,14 @@ class StreamUNetControlDiffusion:
             device=self.device,
             dtype=self.vae.dtype,
         )
-        # ---- DEBUG ---- TODO
-        #print(f'<< StreamUNetControlDiffusion::encode_image() >> Calling self.vae.encode()')
-        if self.save_intermediates == True:
-            print('>>>>> Saving encoder input as dictionary.')
-            self.enc_calib_item = {"images": image_tensors}
         img_latent = retrieve_latents(self.vae.encode(image_tensors), self.generator)
         img_latent = img_latent * self.vae.config.scaling_factor
         x_t_latent = self.add_noise(img_latent, self.init_noise[0], 0)
         return x_t_latent
 
     def decode_image(self, x_0_pred_out: torch.Tensor) -> torch.Tensor:
-        # ---- DEBUG ---- TODO
-        #print(f'<< StreamUNetControlDiffusion::decode_image() >> Calling self.vae.decode()')
         if self.save_intermediates == True:
-            print('>>>>> Saving decoder input as dictionary.')
-            self.dec_calib_item = {"latent": x_0_pred_out / self.vae.config.scaling_factor}
+            self.dec_calib_item = {"latent": (x_0_pred_out / self.vae.config.scaling_factor).to(torch.float32).detach().cpu().numpy()}
         output_latent = self.vae.decode(
             x_0_pred_out / self.vae.config.scaling_factor, return_dict=False
         )[0]
@@ -584,9 +573,15 @@ class StreamUNetControlDiffusion:
         end = torch.cuda.Event(enable_timing=True)
         start.record()
 
-        x = self.pipe.image_processor.preprocess(image, self.height, self.width).to(
-            dtype=self.dtype, device=self.device
-        )
+        #x = self.pipe.image_processor.preprocess(image, self.height, self.width).to(
+        #    dtype=self.dtype, device=self.device
+        #)
+        x = self.pipe.image_processor.preprocess(image, self.height, self.width)
+
+        if self.save_intermediates == True:
+            self.enc_calib_item = {"images": x.detach().cpu().numpy()}
+
+        x = x.to(dtype = self.dtype, device = self.device)
 
         control_x = self.pipe.prepare_control_image(
             image=image,
@@ -606,8 +601,6 @@ class StreamUNetControlDiffusion:
                 time.sleep(self.inference_time_ema)
                 return self.prev_image_result
 
-        # ---- DEBUG ---- TODO
-        #print(f'<< StreamUNetControlDiffusion::__call__() >> Calling encode --> predict --> decode')
         x_t_latent = self.encode_image(x)
         x_0_pred_out = self.predict_x0_batch(x_t_latent, control_x)
         x_output = self.decode_image(x_0_pred_out)
@@ -628,7 +621,7 @@ class StreamUNetControlDiffusion:
         dec_calib_item - Decoder engine input
     """
     def gen_calib_dict_intermediates(self, image: Union[torch.Tensor, PIL.Image.Image, List[PIL.Image.Image]]):
-        # Execute a __call__() pass to collect all engine inputs
+        # Execute __call__() passes to collect required batches of all engine inputs
         self.save_intermediates = True
         self.__call__(image)
         self.save_intermediates = False

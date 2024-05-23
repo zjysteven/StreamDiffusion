@@ -80,6 +80,7 @@ class EngineBuilder:
         if not force_engine_build and os.path.exists(engine_path):
             print(f"Found cached engine: {engine_path}")
         else:
+            print('Building engine.')
             build_engine(
                 engine_path=engine_path,
                 onnx_opt_path=onnx_opt_path,

@@ -40,7 +40,7 @@ def compile_vae_encoder(
     if int8_calib_loader is not None:
         engine_build_options['quant_int8'] = True
         engine_build_options['quant_int8_calib_loader'] = int8_calib_loader
-        engine_build_options['quant_int8_calib_cache'] = 'vae_enc_calibration.cache'
+        #engine_build_options['quant_int8_calib_cache'] = 'vae_enc_calibration.cache'
 
     builder.build(
         onnx_path,
@@ -65,7 +65,7 @@ def compile_vae_decoder(
     if int8_calib_loader is not None:
         engine_build_options['quant_int8'] = True
         engine_build_options['quant_int8_calib_loader'] = int8_calib_loader
-        engine_build_options['quant_int8_calib_cache'] = 'vae_dec_calibration.cache'
+        #engine_build_options['quant_int8_calib_cache'] = 'vae_dec_calibration.cache'
 
     builder.build(
         onnx_path,
@@ -88,9 +88,10 @@ def compile_unet(
     builder = EngineBuilder(model_data, unet, device=torch.device("cuda"))
 
     if int8_calib_loader is not None:
+        print('<< compile_unet() >> Setting build options for INT8 quantization.')
         engine_build_options['quant_int8'] = True
         engine_build_options['quant_int8_calib_loader'] = int8_calib_loader
-        engine_build_options['quant_int8_calib_cache'] = 'unet_calibration.cache'
+        #engine_build_options['quant_int8_calib_cache'] = 'unet_calibration.cache'
 
     builder.build(
         onnx_path,
@@ -213,6 +214,10 @@ def accelerate_with_tensorrt_unetcontrol(
     min_batch_size: int = 1,
     use_cuda_graph: bool = False,
     engine_build_options: dict = {},
+    #engine_dir_quant: str = '',
+    quant_encoder = False,
+    quant_unet = False,
+    quant_decoder = False,
     encoder_calibration_loader = None,
     unet_calibration_loader = None,
     decoder_calibration_loader = None,
@@ -234,12 +239,18 @@ def accelerate_with_tensorrt_unetcontrol(
     gc.collect()
     torch.cuda.empty_cache()
 
+    # ONNX directory for both quantized and standard TRT engines
     onnx_dir = os.path.join(engine_dir, "onnx")
     os.makedirs(onnx_dir, exist_ok=True)
 
-    unet_engine_path = f"{engine_dir}/unet.engine"
-    vae_encoder_engine_path = f"{engine_dir}/vae_encoder.engine"
-    vae_decoder_engine_path = f"{engine_dir}/vae_decoder.engine"
+    # Path and filenames based on quantization flags
+    unet_base = "unet" if quant_unet == False else "unet_quantINT8"
+    vae_encoder_base = "vae_encoder" if quant_encoder == False else "vae_encoder_quantINT8"
+    vae_decoder_base = "vae_decoder" if quant_decoder == False else "vae_decoder_quantINT8"
+
+    unet_engine_path = f"{engine_dir}/{unet_base}.engine"
+    vae_encoder_engine_path = f"{engine_dir}/{vae_encoder_base}.engine"
+    vae_decoder_engine_path = f"{engine_dir}/{vae_decoder_base}.engine"
 
     unet_model = UNetControlNet(
         fp16=True,
@@ -264,11 +275,11 @@ def accelerate_with_tensorrt_unetcontrol(
         compile_unet(
             unet,
             unet_model,
-            create_onnx_path("unet", onnx_dir, opt=False),
-            create_onnx_path("unet", onnx_dir, opt=True),
+            create_onnx_path(unet_base, onnx_dir, opt=False),
+            create_onnx_path(unet_base, onnx_dir, opt=True),
             unet_engine_path,
             engine_build_options=engine_build_options,
-            unet_calibration_loader
+            int8_calib_loader=unet_calibration_loader
         )
     else:
         del unet
@@ -278,11 +289,11 @@ def accelerate_with_tensorrt_unetcontrol(
         compile_vae_decoder(
             vae,
             vae_decoder_model,
-            create_onnx_path("vae_decoder", onnx_dir, opt=False),
-            create_onnx_path("vae_decoder", onnx_dir, opt=True),
+            create_onnx_path(vae_decoder_base, onnx_dir, opt=False),
+            create_onnx_path(vae_decoder_base, onnx_dir, opt=True),
             vae_decoder_engine_path,
             engine_build_options=engine_build_options,
-            decoder_calibration_loader
+            int8_calib_loader=decoder_calibration_loader
         )
 
     if not os.path.exists(vae_encoder_engine_path):
@@ -290,11 +301,11 @@ def accelerate_with_tensorrt_unetcontrol(
         compile_vae_encoder(
             vae_encoder,
             vae_encoder_model,
-            create_onnx_path("vae_encoder", onnx_dir, opt=False),
-            create_onnx_path("vae_encoder", onnx_dir, opt=True),
+            create_onnx_path(vae_encoder_base, onnx_dir, opt=False),
+            create_onnx_path(vae_encoder_base, onnx_dir, opt=True),
             vae_encoder_engine_path,
             engine_build_options=engine_build_options,
-            encoder_calibration_loader
+            int8_calib_loader=encoder_calibration_loader
         )
 
     del vae

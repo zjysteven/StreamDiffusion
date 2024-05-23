@@ -229,6 +229,7 @@ class Engine:
             config_kwargs["tactic_sources"] = []
 
         if int8 == True:
+            print('\t... with INT8 quantization.')
             engine = engine_from_network(
                 network_from_onnx_path(onnx_path, flags=[trt.OnnxParserFlag.NATIVE_INSTANCENORM]),
                 config=CreateConfig(
@@ -237,6 +238,7 @@ class Engine:
                 save_timing_cache=timing_cache,
             )
         else:
+            print('\t... with FP16 precision.')
             engine = engine_from_network(
                 network_from_onnx_path(onnx_path, flags=[trt.OnnxParserFlag.NATIVE_INSTANCENORM]),
                 config=CreateConfig(
@@ -407,6 +409,8 @@ def build_engine(
     )
 
     if quant_int8 == True:
+        # --- Debug --- TODO
+        print('-----> Building engine with 8-bit quantization')
         calibrator = Calibrator(data_loader = quant_int8_calib_loader, cache = quant_int8_calib_cache)
         engine.build(
             onnx_opt_path,
@@ -419,6 +423,8 @@ def build_engine(
             calibrator=calibrator
         )
     else:
+        # --- Debug --- TODO
+        print('-----> Building engine with FP16 precision')
         engine.build(
             onnx_opt_path,
             fp16=True,
