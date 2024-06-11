@@ -269,10 +269,19 @@ class StreamUNetControlDiffusion:
             dim=0,
         )
 
+        # self.init_noise = torch.randn(
+        #     (self.batch_size, 4, self.latent_height, self.latent_width),
+        #     generator=generator,
+        # ).to(device=self.device, dtype=self.dtype)
         self.init_noise = torch.randn(
-            (self.batch_size, 4, self.latent_height, self.latent_width),
+            (self.denoising_steps_num, 4, self.latent_height, self.latent_width),
             generator=generator,
         ).to(device=self.device, dtype=self.dtype)
+        self.init_noise = torch.repeat_interleave(
+            self.init_noise,
+            repeats=self.frame_bff_size if self.use_denoising_batch else 1,
+            dim=0,
+        )
 
         self.stock_noise = torch.zeros_like(self.init_noise)
 
@@ -588,4 +597,4 @@ class StreamUNetControlDiffusion:
         torch.cuda.synchronize()
         inference_time = start.elapsed_time(end) / 1000
         self.inference_time_ema = 0.9 * self.inference_time_ema + 0.1 * inference_time
-        return x_output, inference_time
+        return x_output

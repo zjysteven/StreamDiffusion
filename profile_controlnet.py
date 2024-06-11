@@ -151,7 +151,7 @@ for i in tqdm(range(num_batches), total=num_batches):
     else:
         stream.update_prompt(prompts)
     
-    images, _ = stream(cond_buffer[-img_batch_size:])
+    images = stream(cond_buffer[-img_batch_size:])
 
     if i >= delay - 1:
         for j in range(len(images)):

@@ -4,9 +4,11 @@ import json
 from collections import defaultdict
 import numpy as np
 from tqdm import tqdm
+from vidgear.gears import CamGear
 
 import torch
 from torchvision.io import read_video, write_video
+from torchvision.transforms import functional as TF
 from diffusers import (
     AutoencoderTiny, LCMScheduler,
     StableDiffusionControlNetImg2ImgPipeline,
@@ -28,8 +30,8 @@ parser.add_argument('--cfg_type', type=str, choices=['none', 'self', 'initialize
 parser.add_argument('--size', type=int, default=256)
 parser.add_argument('--cond_size', type=int, default=64)
 parser.add_argument('--frame_bff_size', type=int, default=1)
-parser.add_argument('--prompt', type=str, required=True)
-parser.add_argument('--video_path', type=str, required=True)
+parser.add_argument('--prompt', type=str, default='stunning sunset seen from the sea')
+parser.add_argument('--video_url', type=str, default='https://youtu.be/xuP4g7IDgDM?si=LYOt1xmuOrGvOMUB')
 parser.add_argument(
     '--lcm_id', type=str, default='1e-6',
     choices=[
@@ -41,14 +43,24 @@ parser.add_argument('--server', type=str, choices=['athena', 'lighthouse'], defa
 args = parser.parse_args()
 
 # input data
-video_info = read_video(args.video_path)
-video = video_info[0] / 255
-fps = int(video_info[2]["video_fps"])
-print(f"original video shape: {video.shape}")
-num_frames = (video.shape[0] // fps) * fps
+# YouTube Video URL as input
+options = {
+    "CAP_PROP_FPS": 30,
+    "STREAM_RESOLUTION": "240p"
+}
+video_stream = CamGear(
+    source=args.video_url,
+    stream_mode = True, logging=True, **options
+).start()
+fps = int(video_stream.framerate)
+# video_info = read_video(args.video_path)
+# video = video_info[0] / 255
+# fps = int(video_info[2]["video_fps"])
+# print(f"original video shape: {video.shape}")
+# num_frames = (video.shape[0] // fps) * fps
 args.frame_bff_size = fps # hard-coded, is there a better way?
-assert num_frames % args.frame_bff_size == 0, \
-    f"num_frames [{num_frames}] should be divisible by frame_bff_size [{args.frame_bff_size}]"
+# assert num_frames % args.frame_bff_size == 0, \
+#     f"num_frames [{num_frames}] should be divisible by frame_bff_size [{args.frame_bff_size}]"
 
 #################################################################
 # model loading
@@ -78,12 +90,12 @@ stream = StreamUNetControlDiffusion(
     cfg_type=args.cfg_type,
     frame_buffer_size=args.frame_bff_size,
 )
-similar_image_filter_threshold = 0.90
-similar_image_filter_max_skip_frame = 30
-stream.enable_similar_image_filter(
-    similar_image_filter_threshold,
-    similar_image_filter_max_skip_frame,
-)
+# similar_image_filter_threshold = 0.90
+# similar_image_filter_max_skip_frame = 30
+# stream.enable_similar_image_filter(
+#     similar_image_filter_threshold,
+#     similar_image_filter_max_skip_frame,
+# )
 delay = stream.denoising_steps_num
 
 # If the loaded model is not LCM, merge LCM
@@ -122,36 +134,64 @@ stream.prepare(
     negative_prompt,
     guidance_scale=1.2,
 )
-video_result = torch.zeros(num_frames, args.size, args.size, 3)
-video = list(video) + [video[-1]] * (delay - 1) * img_batch_size
-num_batches = len(video) // img_batch_size
-frame_cnt = 0
+video_result = [] # torch.zeros(num_frames, args.size, args.size, 3)
+#video = list(video) + [video[-1]] * (delay - 1) * img_batch_size
+#num_batches = len(video) // img_batch_size
+#frame_cnt = 0
 
-for i in tqdm(range(num_batches), total=num_batches):
-    frames = video[i*img_batch_size:(i+1)*img_batch_size]
-    cond_buffer.extend(frames)
+batch_idx = 0
+while True:
+    form_a_batch = True
+    # read frames
+    for _ in range(img_batch_size):
+        frame = video_stream.read()
+        if frame is None:
+            form_a_batch = False
+            break
+        
+        cond_buffer.append(
+            TF.resize(torch.from_numpy(frame).permute(2, 0, 1) / 255, (args.cond_size, args.cond_size))
+        )
     
-    output_frames = stream(
-        torch.stack(cond_buffer[-img_batch_size:]).permute(0, 3, 1, 2)
-    )
+    if form_a_batch:
+        # we have enough frames to form a batch
+        batch_input = torch.stack(cond_buffer[-img_batch_size:])
+        output_frames = stream(batch_input)
 
-    if i >= delay - 1:
-        for j in range(len(output_frames)):
-            video_result[frame_cnt] = postprocess_image(
-                output_frames[j].permute(1, 2, 0),
-                output_type="pt"
+        if batch_idx >= delay - 1:
+            for j in range(len(output_frames)):
+                video_result.append(
+                    postprocess_image(
+                        output_frames[j].permute(1, 2, 0),
+                        output_type="pt"
+                    )
+                )
+
+        batch_idx += 1
+    else:
+        for _ in range(delay - 1):
+            output_frames = stream(
+                torch.stack(cond_buffer[-img_batch_size:])
             )
-            frame_cnt += 1
+            for j in range(len(output_frames)):
+                video_result.append(
+                    postprocess_image(
+                        output_frames[j].permute(1, 2, 0),
+                        output_type="pt"
+                    )
+                )
 
-#assert frame_cnt == num_frames, f"frame_cnt [{frame_cnt}] != num_frames [{num_frames}]"
-print(f"frame_cnt: {frame_cnt}, num_frames: {num_frames}")
-video_result = video_result * 255
+        break
+
+video_stream.stop()
+
+video_result = torch.stack(video_result).cpu() * 255
 write_video(
-    os.path.join(save_dir, f"{args.video_path.split('/')[-1]}"), 
+    os.path.join(save_dir, f"{args.video_url.split('/')[-1]}_{args.size}.mp4"), 
     video_result, fps=fps
 )
 
-with open(f"{save_dir}/{args.video_path.split('/')[-1].split('.')[0]}_ema_time.txt", 'w') as f:
+with open(f"{save_dir}/{args.video_url.split('/')[-1]}_{args.size}_ema_time.txt", 'w') as f:
     f.write(f'Per batch: {stream.inference_time_ema:.6f} s\n')
     f.write(f'Per image: {stream.inference_time_ema/img_batch_size:.6f} s\n')
     f.write(f'FPS: {1/(stream.inference_time_ema/img_batch_size):.4f}')
