@@ -209,4 +209,6 @@ models/RealESR*
 
 # my development
 local/
-outputs/
+*outputs*
+*.ipynb
+*.sh
