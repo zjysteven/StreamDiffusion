@@ -46,6 +46,8 @@ parser.add_argument('--quant_encoder', type = eval, default = False, choices = [
 parser.add_argument('--quant_unet', type = eval, default = False, choices = [True, False])
 parser.add_argument('--quant_decoder', type = eval, default = False, choices = [True, False])
 
+parser.add_argument('--no_lcm', action = 'store_true')
+
 args = parser.parse_args()
 
 # ========================================================================
@@ -78,7 +80,12 @@ def load_quant_calib_data():
     unet_calib_list = []
     dec_calib_list = []
 
-    calib_dat_fname = 'calib_data256.pickle' if args.size == 256 else 'calib_data512.pickle'
+    if args.no_lcm == True:
+        calib_dat_fname = f'calib_data{args.size}_{args.num_inference_steps}steps_nolcm.pickle'
+    elif args.size == 256:
+        calib_dat_fname = f'calib_data{args.size}_{args.num_inference_steps}steps_lcm{args.lcm_id}.pickle'
+    else:
+        calib_dat_fname = f'calib_data{args.size}_{args.num_inference_steps}steps.pickle'
 
     if os.path.exists(calib_dat_fname):
         print('>>> Loading existing calibration data.')
@@ -157,6 +164,7 @@ if __name__ == "__main__":
     )
 
     pipe = StableDiffusionControlNetImg2ImgPipeline.from_pretrained(
+        #"stabilityai/sdxl-turbo",
         "runwayml/stable-diffusion-v1-5" if args.size == 512 else "lambdalabs/miniSD-diffusers",
         controlnet=controlnet,
         torch_dtype=torch.float16,
@@ -179,11 +187,13 @@ if __name__ == "__main__":
     )
     delay = stream.denoising_steps_num
 
-    # If the loaded model is not LCM, merge LCM
-    stream.load_lcm_lora(
-        "latent-consistency/lcm-lora-sdv1-5" if args.size == 512 else f"zjysteven/lcm-lora-miniSD-{args.lcm_id}"
-    )
-    stream.fuse_lora()
+    if args.no_lcm == False:
+        # If the loaded model is not LCM, merge LCM
+        stream.load_lcm_lora(
+            "latent-consistency/lcm-lora-sdv1-5" if args.size == 512 else f"zjysteven/lcm-lora-miniSD-{args.lcm_id}"
+        )
+        stream.fuse_lora()
+
     # Use Tiny VAE for further acceleration
     stream.vae = AutoencoderTiny.from_pretrained("madebyollin/taesd").to(device=pipe.device, dtype=pipe.dtype)
 
@@ -222,6 +232,8 @@ if __name__ == "__main__":
         save_dir += '_UNetQuant=INT8'
     if args.quant_decoder == True:
         save_dir += '_decoderQuant=INT8'
+    if args.no_lcm == True:
+        save_dir += '_no_LCM_LoRA'
 
     os.makedirs(save_dir, exist_ok=True)
 
@@ -236,19 +248,19 @@ if __name__ == "__main__":
         # List will be 'None' if flag is not set to quantize the net
         enc_calib_list, unet_calib_list, dec_calib_list = load_quant_calib_data()
 
-        """
-        # Engines stored with and without quantization
-        if args.size != 256:
-            eng_dir_quant = f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_quant=INT8_framebff{args.frame_bff_size}"
+        if args.no_lcm == True:
+            engine_dir = f'engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}_nolcm'
+        elif args.size == 256:
+            engine_dir = f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}_lcm{args.lcm_id}"
         else:
-            eng_dir_quant = f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_quant=INT8_framebff{args.frame_bff_size}_lcm{args.lcm_id}"
-        """
+            engine_dir = f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}"
 
         stream = accelerate_with_tensorrt_unetcontrol(
             stream,
-            f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}" \
-            if args.size != 256 else \
-            f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}_lcm{args.lcm_id}",
+            engine_dir,
+            #f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}" \
+            #if args.size != 256 else \
+            #f"engines/unet_controlnet_size{args.size}-{args.cond_size}_strength{args.strength}_steps{args.num_inference_steps}_cfg={args.cfg_type}_framebff{args.frame_bff_size}_lcm{args.lcm_id}",
             max_batch_size=stream.batch_size,
             engine_build_options={
                 'opt_image_height': args.size,
@@ -305,7 +317,9 @@ if __name__ == "__main__":
                 grid_output.save(f'{save_dir}/img_{img_cnt:04d}.jpg')
                 img_cnt += 1
 
-    with open(f'{save_dir}/ema_time.txt', 'w') as f:
+    with open(f'{save_dir}/ema_time.txt', 'a') as f:
+        f.write('=========================================\n')
         f.write(f'Per batch: {stream.inference_time_ema:.6f} s\n')
         f.write(f'Per image: {stream.inference_time_ema/img_batch_size:.6f} s\n')
-        f.write(f'FPS: {1/(stream.inference_time_ema/img_batch_size):.4f}')
+        f.write(f'FPS: {1/(stream.inference_time_ema/img_batch_size):.4f}\n')
+        f.write('=========================================\n\n')
