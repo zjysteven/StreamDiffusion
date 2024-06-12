@@ -80,7 +80,7 @@ dependencies:
     - cuda-python==12.4.0
     - datasets==2.18.0
     - dctorch==0.1.2
-    - diffusers==0.27.2
+    # - diffusers==0.27.2
     - dill==0.3.8
     - docker-pycreds==0.4.0
     - einops==0.7.0
