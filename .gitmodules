@@ -1,0 +1,4 @@
+[submodule "diffusers"]
+	path = diffusers
+	url = https://github.com/zjysteven/diffusers.git
+	branch = gligen_controlnet
