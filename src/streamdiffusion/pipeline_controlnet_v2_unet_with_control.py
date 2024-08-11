@@ -219,6 +219,8 @@ class StreamUNetControlDiffusion:
             self.x_t_latent_buffer = None
             self.control_x_buffer = None
 
+        # print('x_t_latent_buffer: ', self.x_t_latent_buffer.shape, 'control_x_buffer: ', self.control_x_buffer.shape)
+
         if self.cfg_type == "none":
             self.guidance_scale = 1.0
         else:
@@ -237,20 +239,24 @@ class StreamUNetControlDiffusion:
             do_classifier_free_guidance=do_classifier_free_guidance,
             negative_prompt=negative_prompt,
         )
-        #self.prompt_embeds = encoder_output[0].repeat(self.batch_size, 1, 1)
+        # print('denoise_steps_num: ', self.denoising_steps_num)
+        # print('encoder_output: ', encoder_output[0].shape, encoder_output[1].shape)
         self.prompt_embeds = encoder_output[0].repeat(self.denoising_steps_num, 1, 1)
+        # print('prompt_embeds: ', self.prompt_embeds.shape)
 
         if self.use_denoising_batch and self.cfg_type == "full":
-            uncond_prompt_embeds = encoder_output[1].repeat(self.batch_size, 1, 1)
-        elif self.cfg_type == "initialize":
-            uncond_prompt_embeds = encoder_output[1].repeat(self.frame_bff_size, 1, 1)
+            self.uncond_prompt_embeds = encoder_output[1].repeat(self.denoising_steps_num, 1, 1)
+        elif self.use_denoising_batch and self.cfg_type == "initialize":
+            self.uncond_prompt_embeds = encoder_output[1]
 
         if self.guidance_scale > 1.0 and (
             self.cfg_type == "initialize" or self.cfg_type == "full"
         ):
             self.prompt_embeds = torch.cat(
-                [uncond_prompt_embeds, self.prompt_embeds], dim=0
+                [self.uncond_prompt_embeds, self.prompt_embeds], dim=0
             )
+            # print('uncond_prompt_embeds: ', self.uncond_prompt_embeds.shape)
+            # print('prompt_embeds: ', self.prompt_embeds.shape)
 
         #self.scheduler.set_timesteps(num_inference_steps, self.device)
         #self.timesteps = self.scheduler.timesteps.to(self.device)
@@ -268,6 +274,7 @@ class StreamUNetControlDiffusion:
             repeats=self.frame_bff_size if self.use_denoising_batch else 1,
             dim=0,
         )
+        # print('sub_timesteps_tensor: ', self.sub_timesteps_tensor)
 
         # self.init_noise = torch.randn(
         #     (self.batch_size, 4, self.latent_height, self.latent_width),
@@ -351,10 +358,23 @@ class StreamUNetControlDiffusion:
             num_images_per_prompt=1,
             do_classifier_free_guidance=False,
         )
-        #self.prompt_embeds = encoder_output[0].repeat(self.batch_size, 1, 1)
-        #self.prompt_embeds[self.prompt_update_idx % self.batch_size] = encoder_output[0].repeat(1, 1, 1)
-        #self.prompt_update_idx += 1
-        self.prompt_embeds = torch.cat((encoder_output[0], self.prompt_embeds[:-self.frame_bff_size]), dim=0)
+        # TODO: what if we have negative embeds
+        if not self.do_classifier_free_guidance:
+            self.prompt_embeds = torch.cat((encoder_output[0], self.prompt_embeds[:-self.frame_bff_size]), dim=0)
+        elif self.cfg_type == "initialize":
+            positive_prompt_embeds = self.prompt_embeds[self.frame_bff_size:]
+            positive_prompt_embeds = torch.cat((encoder_output[0], positive_prompt_embeds[:-self.frame_bff_size]), dim=0)
+            self.prompt_embeds = torch.cat(
+                [self.uncond_prompt_embeds, positive_prompt_embeds], dim=0
+            )
+        elif self.cfg_type == "full":
+            positive_prompt_embeds = self.prompt_embeds[self.batch_size:]
+            positive_prompt_embeds = torch.cat((encoder_output[0], positive_prompt_embeds[:-self.frame_bff_size]), dim=0)
+            self.prompt_embeds = torch.cat(
+                [self.uncond_prompt_embeds, positive_prompt_embeds], dim=0
+            )
+        else:
+            raise ValueError("Invalid cfg_type")
 
     def add_noise(
         self,
@@ -398,13 +418,24 @@ class StreamUNetControlDiffusion:
         idx: Optional[int] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         if self.guidance_scale > 1.0 and (self.cfg_type == "initialize"):
-            x_t_latent_plus_uc = torch.concat([x_t_latent[0:1], x_t_latent], dim=0)
-            t_list = torch.concat([t_list[0:1], t_list], dim=0)
+            x_t_latent_plus_uc = torch.concat([x_t_latent[:self.frame_bff_size], x_t_latent], dim=0)
+            t_list = torch.concat([t_list[:self.frame_bff_size], t_list], dim=0)
+            image = torch.concat([image[:self.frame_bff_size], image], dim=0)
         elif self.guidance_scale > 1.0 and (self.cfg_type == "full"):
             x_t_latent_plus_uc = torch.concat([x_t_latent, x_t_latent], dim=0)
             t_list = torch.concat([t_list, t_list], dim=0)
+            image = torch.concat([image, image], dim=0)
         else:
             x_t_latent_plus_uc = x_t_latent
+
+        # print('=' * 50)
+        # print(
+        #     'sample: ', x_t_latent_plus_uc.shape,
+        #     't_list: ', t_list.shape,
+        #     'prompt_embeds: ', self.prompt_embeds.shape, 
+        #     'image: ', image.shape
+        # )
+        # print('=' * 50)
 
         model_pred = self.unet(
             x_t_latent_plus_uc,
@@ -414,9 +445,9 @@ class StreamUNetControlDiffusion:
         )[0]
 
         if self.guidance_scale > 1.0 and (self.cfg_type == "initialize"):
-            noise_pred_text = model_pred[1:]
+            noise_pred_text = model_pred[self.frame_bff_size:]
             self.stock_noise = torch.concat(
-                [model_pred[0:1], self.stock_noise[1:]], dim=0
+                [model_pred[:self.frame_bff_size], self.stock_noise[self.frame_bff_size:]], dim=0
             )  # ここコメントアウトでself out cfg
         elif self.guidance_scale > 1.0 and (self.cfg_type == "full"):
             noise_pred_uncond, noise_pred_text = model_pred.chunk(2)
@@ -443,22 +474,22 @@ class StreamUNetControlDiffusion:
                 delta_x = self.scheduler_step_batch(model_pred, scaled_noise, idx)
                 alpha_next = torch.concat(
                     [
-                        self.alpha_prod_t_sqrt[1:],
-                        torch.ones_like(self.alpha_prod_t_sqrt[0:1]),
+                        self.alpha_prod_t_sqrt[self.frame_bff_size:],
+                        torch.ones_like(self.alpha_prod_t_sqrt[0:self.frame_bff_size]),
                     ],
                     dim=0,
                 )
                 delta_x = alpha_next * delta_x
                 beta_next = torch.concat(
                     [
-                        self.beta_prod_t_sqrt[1:],
-                        torch.ones_like(self.beta_prod_t_sqrt[0:1]),
+                        self.beta_prod_t_sqrt[self.frame_bff_size:],
+                        torch.ones_like(self.beta_prod_t_sqrt[0:self.frame_bff_size]),
                     ],
                     dim=0,
                 )
                 delta_x = delta_x / beta_next
                 init_noise = torch.concat(
-                    [self.init_noise[1:], self.init_noise[0:1]], dim=0
+                    [self.init_noise[self.frame_bff_size:], self.init_noise[0:self.frame_bff_size]], dim=0
                 )
                 self.stock_noise = init_noise + delta_x
 
@@ -491,6 +522,7 @@ class StreamUNetControlDiffusion:
     ) -> torch.Tensor:
         prev_latent_batch = self.x_t_latent_buffer
         prev_image = self.control_x_buffer
+        # print('prev_image: ', prev_image.shape, 'image: ', image.shape)
 
         if self.use_denoising_batch:
             # construct input batch with current input and buffer
@@ -578,9 +610,10 @@ class StreamUNetControlDiffusion:
             num_images_per_prompt=1,
             device=self.device,
             dtype=self.dtype,
-            do_classifier_free_guidance=self.do_classifier_free_guidance,
+            do_classifier_free_guidance=False, # self.do_classifier_free_guidance,
             guess_mode=False,
         )
+        # print('control_x: ', control_x.shape)
 
         if self.similar_image_filter:
             x = self.similar_filter(x)
