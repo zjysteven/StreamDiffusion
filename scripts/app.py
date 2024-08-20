@@ -1,6 +1,7 @@
 import gradio as gr
 from gradio_log import Log
 
+import argparse
 import os
 import sys
 from typing import Literal, Dict, Optional, Union
@@ -40,13 +41,19 @@ logging.basicConfig(filename=log_file,
                     level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+parser = argparse.ArgumentParser()
+parser.add_argument('--size', type=int, default=256, choices=[256, 512])
+parser.add_argument('--accel', type=str, default='xformers', choices=['xformers', 'trt'])
+parser.add_argument('--strength', type=float, default=1.0)
+args = parser.parse_args()
 
 ##########################################################################
 # loading model
 logging.info("Model is being loaded...")
 
-size = 256
-accel = 'xformers'
+size = args.size
+accel = args.accel
+strength = args.strength
 
 controlnet = ControlNetModel.from_pretrained(
     'lllyasviel/control_v11f1e_sd15_tile' if size == 512 else 'zjysteven/control_minisd_tile',
@@ -67,7 +74,7 @@ stream = StreamUNetControlDiffusion(
     height=size,
     width=size,
     num_inference_steps=4,
-    strength=1.0,
+    strength=strength,
     torch_dtype=torch.float16,
     cfg_type="none",
     frame_buffer_size=frame_buffer_size,
