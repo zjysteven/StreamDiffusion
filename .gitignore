@@ -212,3 +212,4 @@ local/
 *outputs*
 *.ipynb
 *.sh
+!demo_files/video_inputs/*

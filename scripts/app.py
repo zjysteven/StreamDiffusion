@@ -254,7 +254,7 @@ with gr.Blocks(
             # height=512, width=512
         )
 
-        video_output = gr.Video(label="Video Output", scale=2)
+        video_output = gr.Video(label="Video Output", autoplay=True, scale=2)
         # video_output.render()
 
     with gr.Row():
@@ -277,6 +277,13 @@ with gr.Blocks(
             ["https://youtu.be/xuP4g7IDgDM?si=LYOt1xmuOrGvOMUB", "stunning sunset seen from the sea, realistic, natural"],
         ],
         [video_url, prompt_input],
+    )
+    gr.Examples(
+        [
+            [f"{DEMO_DIR}/video_inputs/riding_in_busy_street_pov_realistic.mp4", "riding in busy street, pov, realistic"],
+            [f"{DEMO_DIR}/video_inputs/riding_on_a_brigde_pov_realistic.mp4", "riding on a brigde, pov, realistic"],
+        ],
+        [video_file, prompt_input]
     )
 
     Log(log_file, dark=True, xterm_font_size=16, elem_id="gradio-log-comp-id")
