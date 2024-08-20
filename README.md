@@ -16,6 +16,9 @@ git submodule init
 git submodule update
 cd diffusers
 python -m pip install -e .
+
+python -m pip install gradio gradio_log
+python -m pip install -U vidgear[asyncio]
 ```
 
 ## Running examples
