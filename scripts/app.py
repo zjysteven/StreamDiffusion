@@ -210,6 +210,18 @@ def main(
 def play_video():
     return os.path.join(VIDEO_DIR, "output.mp4")
 
+def calc_compression_rate():
+    crate = (size // 64)**2
+    return f'{crate}x'
+
+def calc_bitrate():
+    brate = 0
+    try:
+        brate = int(((1/(stream.inference_time_ema/frame_buffer_size)) * size**2 * 3) // 1)
+    except ZeroDivisionError:
+        brate = 0.0
+    return f'{brate:,}'
+
 
 with gr.Blocks(
     title="Video Compression",
@@ -270,6 +282,16 @@ with gr.Blocks(
             fn=play_video,
             outputs=video_output
         )
+
+    with gr.Row():
+        compression_box = gr.Textbox(
+            label="Compression Rate", interactive=False,
+            value=calc_compression_rate,
+            every=2)
+        bitrate_box = gr.Textbox(
+            label="Bitrate (bps)", interactive=False,
+            value=calc_bitrate,
+            every=2)
 
     gr.Examples(
         [
