@@ -14,12 +14,11 @@ from diffusers.utils import PIL_INTERPOLATION
 from streamdiffusion.image_filter import SimilarImageFilter
 
 
-class UNet2DConditionControlNetModel(torch.nn.Module):
-    def __init__(self, unet, controlnet) -> None:
+class ControlNetModel(torch.nn.Module):
+    def __init__(self, controlnet) -> None:
         super().__init__()
-        self.unet = unet
         self.controlnet = controlnet
-        
+
     def forward(self, sample, timestep, encoder_hidden_states, image):
         # hard-coded since it is not clear how to integrate this argument into tensorrt
         conditioning_scale = 1.0
@@ -38,7 +37,57 @@ class UNet2DConditionControlNetModel(torch.nn.Module):
             for down_sample in down_samples
         ]
         mid_block_res_sample = conditioning_scale * mid_sample
-        
+
+        return (
+            down_block_res_samples[0],
+            down_block_res_samples[1],
+            down_block_res_samples[2],
+            down_block_res_samples[3],
+            down_block_res_samples[4],
+            down_block_res_samples[5],
+            down_block_res_samples[6],
+            down_block_res_samples[7],
+            down_block_res_samples[8],
+            down_block_res_samples[9],
+            down_block_res_samples[10],
+            down_block_res_samples[11],
+            mid_block_res_sample
+        )
+
+
+class UNet2DNoControlNetModel(torch.nn.Module):
+    def __init__(self, unet) -> None:
+        super().__init__()
+        self.unet = unet
+
+    def forward(self, sample, timestep, encoder_hidden_states, 
+                down_block_res_samples_0,
+                down_block_res_samples_1,
+                down_block_res_samples_2,
+                down_block_res_samples_3,
+                down_block_res_samples_4,
+                down_block_res_samples_5,
+                down_block_res_samples_6,
+                down_block_res_samples_7,
+                down_block_res_samples_8,
+                down_block_res_samples_9,
+                down_block_res_samples_10,
+                down_block_res_samples_11,
+                mid_block_res_sample):
+        down_block_res_samples = (
+            down_block_res_samples_0,
+            down_block_res_samples_1,
+            down_block_res_samples_2,
+            down_block_res_samples_3,
+            down_block_res_samples_4,
+            down_block_res_samples_5,
+            down_block_res_samples_6,
+            down_block_res_samples_7,
+            down_block_res_samples_8,
+            down_block_res_samples_9,
+            down_block_res_samples_10,
+            down_block_res_samples_11,
+        )
         noise_pred = self.unet(
             sample,
             timestep,
@@ -51,7 +100,7 @@ class UNet2DConditionControlNetModel(torch.nn.Module):
         return noise_pred
 
 
-class StreamUNetControlDiffusion:
+class StreamUNetControlSeparatedDiffusion:
     def __init__(
         self,
         pipe: StableDiffusionControlNetImg2ImgPipeline,
@@ -117,9 +166,8 @@ class StreamUNetControlDiffusion:
         self.scheduler = LCMScheduler.from_config(self.pipe.scheduler.config)
         self.pipe.scheduler = self.scheduler
         self.text_encoder = pipe.text_encoder
-        self.unet = UNet2DConditionControlNetModel(
-            pipe.unet, pipe.controlnet
-        )
+        self.cnet = ControlNetModel(pipe.controlnet)
+        self.unet = UNet2DNoControlNetModel(pipe.unet)
         self.vae = pipe.vae
 
         self.inference_time_ema = 0
@@ -128,6 +176,7 @@ class StreamUNetControlDiffusion:
         # For collecting calibrator feed dictionaries when using quantization
         self.save_intermediates = False
         self.enc_calib_item = None
+        self.cnet_calib_item = None
         self.unet_calib_item = None
         self.dec_calib_item = None
 
@@ -404,20 +453,72 @@ class StreamUNetControlDiffusion:
         else:
             x_t_latent_plus_uc = x_t_latent
 
+        """
+        Split U-Net + ControlNet into separate models for greater engine + quantization control
+        """
+        (_down_block_res_samples_0,
+        _down_block_res_samples_1,
+        _down_block_res_samples_2,
+        _down_block_res_samples_3,
+        _down_block_res_samples_4,
+        _down_block_res_samples_5,
+        _down_block_res_samples_6,
+        _down_block_res_samples_7,
+        _down_block_res_samples_8,
+        _down_block_res_samples_9,
+        _down_block_res_samples_10,
+        _down_block_res_samples_11, 
+        _mid_block_res_sample) = self.cnet(
+            x_t_latent_plus_uc,
+            t_list,
+            self.prompt_embeds,
+            image,
+        )
+        model_pred = self.unet(
+            x_t_latent_plus_uc,
+            t_list,
+            self.prompt_embeds,
+            _down_block_res_samples_0,
+            _down_block_res_samples_1,
+            _down_block_res_samples_2,
+            _down_block_res_samples_3,
+            _down_block_res_samples_4,
+            _down_block_res_samples_5,
+            _down_block_res_samples_6,
+            _down_block_res_samples_7,
+            _down_block_res_samples_8,
+            _down_block_res_samples_9,
+            _down_block_res_samples_10,
+            _down_block_res_samples_11,
+            _mid_block_res_sample,
+        )[0]
+
         if self.save_intermediates == True:
-            self.unet_calib_item = {
+            self.cnet_calib_item = {
                 "sample": x_t_latent_plus_uc.to(torch.float32).detach().cpu().numpy(),
                 "timestep": t_list.to(torch.float32).detach().cpu().numpy(),
                 "encoder_hidden_states": self.prompt_embeds.detach().cpu().numpy(),
                 "image": image.to(torch.float32).detach().cpu().numpy(),
             }
 
-        model_pred = self.unet(
-            x_t_latent_plus_uc,
-            t_list,
-            self.prompt_embeds,
-            image,
-        )[0]
+            self.unet_calib_item = {
+                "sample": x_t_latent_plus_uc.to(torch.float32).detach().cpu().numpy(),
+                "timestep": t_list.to(torch.float32).detach().cpu().numpy(),
+                "encoder_hidden_states": self.prompt_embeds.detach().cpu().numpy(),
+                "down_block_res_samples_0": _down_block_res_samples_0.to(torch.float32).detach().cpu().numpy(),
+                "down_block_res_samples_1": _down_block_res_samples_1.to(torch.float32).detach().cpu().numpy(),
+                "down_block_res_samples_2": _down_block_res_samples_2.to(torch.float32).detach().cpu().numpy(),
+                "down_block_res_samples_3": _down_block_res_samples_3.to(torch.float32).detach().cpu().numpy(),
+                "down_block_res_samples_4": _down_block_res_samples_4.to(torch.float32).detach().cpu().numpy(),
+                "down_block_res_samples_5": _down_block_res_samples_5.to(torch.float32).detach().cpu().numpy(),
+                "down_block_res_samples_6": _down_block_res_samples_6.to(torch.float32).detach().cpu().numpy(),
+                "down_block_res_samples_7": _down_block_res_samples_7.to(torch.float32).detach().cpu().numpy(),
+                "down_block_res_samples_8": _down_block_res_samples_8.to(torch.float32).detach().cpu().numpy(),
+                "down_block_res_samples_9": _down_block_res_samples_9.to(torch.float32).detach().cpu().numpy(),
+                "down_block_res_samples_10": _down_block_res_samples_10.to(torch.float32).detach().cpu().numpy(),
+                "down_block_res_samples_11": _down_block_res_samples_11.to(torch.float32).detach().cpu().numpy(),
+                "mid_block_res_sample": _mid_block_res_sample.to(torch.float32).detach().cpu().numpy(),
+            }
 
         if self.guidance_scale > 1.0 and (self.cfg_type == "initialize"):
             noise_pred_text = model_pred[1:]
@@ -618,6 +719,7 @@ class StreamUNetControlDiffusion:
 
     Outputs:
         enc_calib_item - Encoder engine input
+        cnet_calib_item - ControlNet engine input
         unet_calib_item - UNet engine input
         dec_calib_item - Decoder engine input
     """
@@ -628,4 +730,7 @@ class StreamUNetControlDiffusion:
         self.save_intermediates = False
 
         # Return
-        return self.enc_calib_item, self.unet_calib_item, self.dec_calib_item
+        return self.enc_calib_item, self.cnet_calib_item, self.unet_calib_item, self.dec_calib_item
+
+    def clear_inference_time_ema(self):
+        self.inference_time_ema = 0

@@ -408,6 +408,338 @@ class UNetControlNet(BaseModel):
         )
 
 
+class UNetSeparateControlNet(BaseModel):
+    def __init__(
+        self,
+        fp16=False,
+        device="cuda",
+        max_batch_size=16,
+        min_batch_size=1,
+        embedding_dim=768,
+        text_maxlen=77,
+        unet_dim=4,
+    ):
+        super(UNetSeparateControlNet, self).__init__(
+            fp16=fp16,
+            device=device,
+            max_batch_size=max_batch_size,
+            min_batch_size=min_batch_size,
+            embedding_dim=embedding_dim,
+            text_maxlen=text_maxlen,
+        )
+        self.unet_dim = unet_dim
+        self.hdim = 320
+        self.name = "UNetSeparateControlNet"
+
+    def get_input_names(self):
+        return [
+            "sample", "timestep", "encoder_hidden_states", 
+            "down_block_res_samples_0", "down_block_res_samples_1", "down_block_res_samples_2",
+            "down_block_res_samples_3", "down_block_res_samples_4", "down_block_res_samples_5",
+            "down_block_res_samples_6", "down_block_res_samples_7", "down_block_res_samples_8",
+            "down_block_res_samples_9", "down_block_res_samples_10", "down_block_res_samples_11",
+            "mid_block_res_sample"
+        ]
+
+    def get_output_names(self):
+        return ["latent"]
+
+    def get_dynamic_axes(self):
+        return {
+            "sample": {0: "2B", 2: "H", 3: "W"},
+            "timestep": {0: "2B"},
+            "encoder_hidden_states": {0: "2B"},
+            "down_block_res_samples_0": {0: "2B", 2: "H", 3: "W"},
+            "down_block_res_samples_1": {0: "2B", 2: "H", 3: "W"},
+            "down_block_res_samples_2": {0: "2B", 2: "H", 3: "W"},
+            "down_block_res_samples_3": {0: "2B", 2: "H2", 3: "W2"},
+            "down_block_res_samples_4": {0: "2B", 2: "H2", 3: "W2"},
+            "down_block_res_samples_5": {0: "2B", 2: "H2", 3: "W2"},
+            "down_block_res_samples_6": {0: "2B", 2: "H4", 3: "W4"},
+            "down_block_res_samples_7": {0: "2B", 2: "H4", 3: "W4"},
+            "down_block_res_samples_8": {0: "2B", 2: "H4", 3: "W4"},
+            "down_block_res_samples_9": {0: "2B", 2: "H8", 3: "W8"},
+            "down_block_res_samples_10": {0: "2B", 2: "H8", 3: "W8"},
+            "down_block_res_samples_11": {0: "2B", 2: "H8", 3: "W8"},
+            "mid_block_res_sample": {0: "2B", 2: "H8", 3: "W8"},
+            "latent": {0: "2B", 2: "H", 3: "W"},
+        }
+
+    def get_input_profile(self, batch_size, image_height, image_width, static_batch, static_shape):
+        latent_height, latent_width = self.check_dims(batch_size, image_height, image_width)
+        (
+            min_batch,
+            max_batch,
+            _, 
+            _, 
+            _, 
+            _,
+            min_latent_height,
+            max_latent_height,
+            min_latent_width,
+            max_latent_width,
+        ) = self.get_minmax_dims(batch_size, image_height, image_width, static_batch, static_shape)
+        return {
+            "sample": [
+                (min_batch, self.unet_dim, min_latent_height, min_latent_width),
+                (batch_size, self.unet_dim, latent_height, latent_width),
+                (max_batch, self.unet_dim, max_latent_height, max_latent_width),
+            ],
+            "timestep": [(min_batch,), (batch_size,), (max_batch,)],
+            "encoder_hidden_states": [
+                (min_batch, self.text_maxlen, self.embedding_dim),
+                (batch_size, self.text_maxlen, self.embedding_dim),
+                (max_batch, self.text_maxlen, self.embedding_dim),
+            ],
+            "down_block_res_samples_0": [
+                (min_batch, self.hdim, min_latent_height, min_latent_width),
+                (batch_size, self.hdim, latent_height, latent_width),
+                (max_batch, self.hdim, max_latent_height, max_latent_width),
+            ],
+            "down_block_res_samples_1": [
+                (min_batch, self.hdim, min_latent_height, min_latent_width),
+                (batch_size, self.hdim, latent_height, latent_width),
+                (max_batch, self.hdim, max_latent_height, max_latent_width),
+            ],
+            "down_block_res_samples_2": [
+                (min_batch, self.hdim, min_latent_height, min_latent_width),
+                (batch_size, self.hdim, latent_height, latent_width),
+                (max_batch, self.hdim, max_latent_height, max_latent_width),
+            ],
+            "down_block_res_samples_3": [
+                (min_batch, self.hdim, min_latent_height // 2, min_latent_width // 2),
+                (batch_size, self.hdim, latent_height // 2, latent_width // 2),
+                (max_batch, self.hdim, max_latent_height // 2, max_latent_width // 2),
+            ],
+            "down_block_res_samples_4": [
+                (min_batch, self.hdim * 2, min_latent_height // 2, min_latent_width // 2),
+                (batch_size, self.hdim * 2, latent_height // 2, latent_width // 2),
+                (max_batch, self.hdim * 2, max_latent_height // 2, max_latent_width // 2),
+            ],
+            "down_block_res_samples_5": [
+                (min_batch, self.hdim * 2, min_latent_height // 2, min_latent_width // 2),
+                (batch_size, self.hdim * 2, latent_height // 2, latent_width // 2),
+                (max_batch, self.hdim * 2, max_latent_height // 2, max_latent_width // 2),
+            ],
+            "down_block_res_samples_6": [
+                (min_batch, self.hdim * 2, min_latent_height // 4, min_latent_width // 4),
+                (batch_size, self.hdim * 2, latent_height // 4, latent_width // 4),
+                (max_batch, self.hdim * 2, max_latent_height // 4, max_latent_width // 4),
+            ],
+            "down_block_res_samples_7": [
+                (min_batch, self.hdim * 4, min_latent_height // 4, min_latent_width // 4),
+                (batch_size, self.hdim * 4, latent_height // 4, latent_width // 4),
+                (max_batch, self.hdim * 4, max_latent_height // 4, max_latent_width // 4),
+            ],
+            "down_block_res_samples_8": [
+                (min_batch, self.hdim * 4, min_latent_height // 4, min_latent_width // 4),
+                (batch_size, self.hdim * 4, latent_height // 4, latent_width // 4),
+                (max_batch, self.hdim * 4, max_latent_height // 4, max_latent_width // 4),
+            ],
+            "down_block_res_samples_9": [
+                (min_batch, self.hdim * 4, min_latent_height // 8, min_latent_width // 8),
+                (batch_size, self.hdim * 4, latent_height // 8, latent_width // 8),
+                (max_batch, self.hdim * 4, max_latent_height // 8, max_latent_width // 8),
+            ],
+            "down_block_res_samples_10": [
+                (min_batch, self.hdim * 4, min_latent_height // 8, min_latent_width // 8),
+                (batch_size, self.hdim * 4, latent_height // 8, latent_width // 8),
+                (max_batch, self.hdim * 4, max_latent_height // 8, max_latent_width // 8),
+            ],
+            "down_block_res_samples_11": [
+                (min_batch, self.hdim * 4, min_latent_height // 8, min_latent_width // 8),
+                (batch_size, self.hdim * 4, latent_height // 8, latent_width // 8),
+                (max_batch, self.hdim * 4, max_latent_height // 8, max_latent_width // 8),
+            ],
+            "mid_block_res_sample": [
+                (min_batch, self.hdim * 4, min_latent_height // 8, min_latent_width // 8),
+                (batch_size, self.hdim * 4, latent_height // 8, latent_width // 8),
+                (max_batch, self.hdim * 4, max_latent_height // 8, max_latent_width // 8),
+            ]
+        }
+
+    def get_shape_dict(self, batch_size, image_height, image_width):
+        latent_height, latent_width = self.check_dims(batch_size, image_height, image_width)
+        return {
+            "sample": (2 * batch_size, self.unet_dim, latent_height, latent_width),
+            "timestep": (2 * batch_size,),
+            "encoder_hidden_states": (2 * batch_size, self.text_maxlen, self.embedding_dim),
+            "latent": (2 * batch_size, 4, latent_height, latent_width),
+            "down_block_res_samples_0": (2 * batch_size, self.hdim, latent_height, latent_width),
+            "down_block_res_samples_1": (2 * batch_size, self.hdim, latent_height, latent_width),
+            "down_block_res_samples_2": (2 * batch_size, self.hdim, latent_height, latent_width),
+            "down_block_res_samples_3": (2 * batch_size, self.hdim, latent_height // 2, latent_width // 2),
+            "down_block_res_samples_4": (2 * batch_size, self.hdim * 2, latent_height // 2, latent_width // 2),
+            "down_block_res_samples_5": (2 * batch_size, self.hdim * 2, latent_height // 2, latent_width // 2),
+            "down_block_res_samples_6": (2 * batch_size, self.hdim * 2, latent_height // 4, latent_width // 4),
+            "down_block_res_samples_7": (2 * batch_size, self.hdim * 4, latent_height // 4, latent_width // 4),
+            "down_block_res_samples_8": (2 * batch_size, self.hdim * 4, latent_height // 4, latent_width // 4),
+            "down_block_res_samples_9": (2 * batch_size, self.hdim * 4, latent_height // 8, latent_width // 8),
+            "down_block_res_samples_10": (2 * batch_size, self.hdim * 4, latent_height // 8, latent_width // 8),
+            "down_block_res_samples_11": (2 * batch_size, self.hdim * 4, latent_height // 8, latent_width // 8),
+            "mid_block_res_sample": (2 * batch_size, self.hdim * 4, latent_height // 8, latent_width // 8),
+        }
+
+    def get_sample_input(self, batch_size, image_height, image_width):
+        latent_height, latent_width = self.check_dims(batch_size, image_height, image_width)
+        dtype = torch.float16 if self.fp16 else torch.float32
+        return (
+            torch.randn(
+                2 * batch_size, self.unet_dim, latent_height, latent_width, dtype=torch.float32, device=self.device
+            ),
+            torch.ones((2 * batch_size,), dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.text_maxlen, self.embedding_dim, dtype=dtype, device=self.device),
+            # down_block_res_samples
+            torch.randn(2 * batch_size, self.hdim, latent_height, latent_width, dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.hdim, latent_height, latent_width, dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.hdim, latent_height, latent_width, dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.hdim, latent_height // 2, latent_width // 2, dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.hdim * 2, latent_height // 2, latent_width // 2, dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.hdim * 2, latent_height // 2, latent_width // 2, dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.hdim * 2, latent_height // 4, latent_width // 4, dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.hdim * 4, latent_height // 4, latent_width // 4, dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.hdim * 4, latent_height // 4, latent_width // 4, dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.hdim * 4, latent_height // 8, latent_width // 8, dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.hdim * 4, latent_height // 8, latent_width // 8, dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.hdim * 4, latent_height // 8, latent_width // 8, dtype=torch.float32, device=self.device),
+            # mid_block_res_sample
+            torch.randn(2 * batch_size, self.hdim * 4, latent_height // 8, latent_width // 8, dtype=torch.float32, device=self.device),
+        )
+
+
+class SeparateControlNet(BaseModel):
+    def __init__(
+        self,
+        fp16=False,
+        device="cuda",
+        max_batch_size=16,
+        min_batch_size=1,
+        embedding_dim=768,
+        text_maxlen=77,
+        unet_dim=4,
+    ):
+        super(SeparateControlNet, self).__init__(
+            fp16=fp16,
+            device=device,
+            max_batch_size=max_batch_size,
+            min_batch_size=min_batch_size,
+            embedding_dim=embedding_dim,
+            text_maxlen=text_maxlen,
+        )
+        self.unet_dim = unet_dim
+        self.hdim = 320
+        self.name = "SeparateControlNet"
+
+    def get_input_names(self):
+        return ["sample", "timestep", "encoder_hidden_states", "image"]
+
+    def get_output_names(self):
+        return [
+            "down_block_res_samples_0",
+            "down_block_res_samples_1",
+            "down_block_res_samples_2",
+            "down_block_res_samples_3",
+            "down_block_res_samples_4",
+            "down_block_res_samples_5",
+            "down_block_res_samples_6",
+            "down_block_res_samples_7",
+            "down_block_res_samples_8",
+            "down_block_res_samples_9",
+            "down_block_res_samples_10",
+            "down_block_res_samples_11",
+            "mid_block_res_sample"
+        ]
+
+    def get_dynamic_axes(self):
+        return {
+            "sample": {0: "2B", 2: "H", 3: "W"},
+            "timestep": {0: "2B"},
+            "encoder_hidden_states": {0: "2B"},
+            "image": {0: "2B", 2: '8H', 3: '8W'},
+            "down_block_res_samples_0": {0: "2B", 2: "H", 3: "W"},
+            "down_block_res_samples_1": {0: "2B", 2: "H", 3: "W"},
+            "down_block_res_samples_2": {0: "2B", 2: "H", 3: "W"},
+            "down_block_res_samples_3": {0: "2B", 2: "H2", 3: "W2"},
+            "down_block_res_samples_4": {0: "2B", 2: "H2", 3: "W2"},
+            "down_block_res_samples_5": {0: "2B", 2: "H2", 3: "W2"},
+            "down_block_res_samples_6": {0: "2B", 2: "H4", 3: "W4"},
+            "down_block_res_samples_7": {0: "2B", 2: "H4", 3: "W4"},
+            "down_block_res_samples_8": {0: "2B", 2: "H4", 3: "W4"},
+            "down_block_res_samples_9": {0: "2B", 2: "H8", 3: "W8"},
+            "down_block_res_samples_10": {0: "2B", 2: "H8", 3: "W8"},
+            "down_block_res_samples_11": {0: "2B", 2: "H8", 3: "W8"},
+            "mid_block_res_sample": {0: "2B", 2: "H8", 3: "W8"},
+        }
+
+    def get_input_profile(self, batch_size, image_height, image_width, static_batch, static_shape):
+        latent_height, latent_width = self.check_dims(batch_size, image_height, image_width)
+        (
+            min_batch,
+            max_batch,
+            min_image_height, 
+            max_image_height, 
+            min_image_width, 
+            max_image_width,
+            min_latent_height,
+            max_latent_height,
+            min_latent_width,
+            max_latent_width,
+        ) = self.get_minmax_dims(batch_size, image_height, image_width, static_batch, static_shape)
+
+        return {
+            "sample": [
+                (min_batch, self.unet_dim, min_latent_height, min_latent_width),
+                (batch_size, self.unet_dim, latent_height, latent_width),
+                (max_batch, self.unet_dim, max_latent_height, max_latent_width)
+            ],
+            "timestep": [(min_batch,), (batch_size,), (max_batch,)],
+            "encoder_hidden_states": [
+                (min_batch, self.text_maxlen, self.embedding_dim),
+                (batch_size, self.text_maxlen, self.embedding_dim),
+                (max_batch, self.text_maxlen, self.embedding_dim)
+            ],
+            "image": [
+                (min_batch, 3, min_image_height, min_image_width),
+                (batch_size, 3, image_height, image_width),
+                (max_batch, 3, max_image_height, max_image_width)
+            ]
+        }
+
+    def get_shape_dict(self, batch_size, image_height, image_width):
+        latent_height, latent_width = self.check_dims(batch_size, image_height, image_width)
+        return {
+            "sample": (2 * batch_size, self.unet_dim, latent_height, latent_width),
+            "timestep": (2 * batch_size,),
+            "encoder_hidden_states": (2 * batch_size, self.text_maxlen, self.embedding_dim),
+            "image": (2 * batch_size, 3, image_height, image_width),
+            "down_block_res_samples_0": (2 * batch_size, self.hdim, latent_height, latent_width),
+            "down_block_res_samples_1": (2 * batch_size, self.hdim, latent_height, latent_width),
+            "down_block_res_samples_2": (2 * batch_size, self.hdim, latent_height, latent_width),
+            "down_block_res_samples_3": (2 * batch_size, self.hdim, latent_height // 2, latent_width // 2),
+            "down_block_res_samples_4": (2 * batch_size, self.hdim * 2, latent_height // 2, latent_width // 2),
+            "down_block_res_samples_5": (2 * batch_size, self.hdim * 2, latent_height // 2, latent_width // 2),
+            "down_block_res_samples_6": (2 * batch_size, self.hdim * 2, latent_height // 4, latent_width // 4),
+            "down_block_res_samples_7": (2 * batch_size, self.hdim * 4, latent_height // 4, latent_width // 4),
+            "down_block_res_samples_8": (2 * batch_size, self.hdim * 4, latent_height // 4, latent_width // 4),
+            "down_block_res_samples_9": (2 * batch_size, self.hdim * 4, latent_height // 8, latent_width // 8),
+            "down_block_res_samples_10": (2 * batch_size, self.hdim * 4, latent_height // 8, latent_width // 8),
+            "down_block_res_samples_11": (2 * batch_size, self.hdim * 4, latent_height // 8, latent_width // 8),
+            "mid_block_res_sample": (2 * batch_size, self.hdim * 4, latent_height // 8, latent_width // 8),
+        }
+
+    def get_sample_input(self, batch_size, image_height, image_width):
+        latent_height, latent_width = self.check_dims(batch_size, image_height, image_width)
+        dtype = torch.float16 if self.fp16 else torch.float32
+        return (
+            torch.randn(
+                2 * batch_size, self.unet_dim, latent_height, latent_width, dtype=torch.float32, device=self.device
+            ),
+            torch.ones((2 * batch_size,), dtype=torch.float32, device=self.device),
+            torch.randn(2 * batch_size, self.text_maxlen, self.embedding_dim, dtype=dtype, device=self.device),
+            torch.randn(2 * batch_size, 3, image_height, image_width, dtype=torch.float32, device=self.device)
+        )
+
+
 sd1_hs = [
     *([(320, 1)]) * 3,
     *([(320, 2)]) * 1,
@@ -441,6 +773,7 @@ class ControlNet(UNet):
 
     def get_input_names(self):
         names = ["sample", "timestep", "encoder_hidden_states"]
+        #names = ["sample", "timestep", "encoder_hidden_states", "image"]
         names.extend([f"control_{i}" for i in range(len(self.hs_dims))])
         return names
 

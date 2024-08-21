@@ -211,6 +211,7 @@ class Engine:
         enable_all_tactics=False,
         timing_cache=None,
         workspace_size=0,
+        int8_modelopt=False,
         int8=False,
         calibrator=None
     ):
@@ -228,7 +229,16 @@ class Engine:
         if not enable_all_tactics:
             config_kwargs["tactic_sources"] = []
 
-        if int8 == True:
+        if int8_modelopt == True:
+            print('\t... with INT8 quantization using modelopt.')
+            engine = engine_from_network(
+                network_from_onnx_path(onnx_path, flags=[trt.OnnxParserFlag.NATIVE_INSTANCENORM]),
+                config=CreateConfig(
+                    int8=int8, precision_constraints='prefer', builder_optimization_level=4,
+                    refittable=enable_refit, profiles=[p], load_timing_cache=timing_cache, **config_kwargs
+                )
+            )
+        elif int8 == True:
             print('\t... with INT8 quantization.')
             engine = engine_from_network(
                 network_from_onnx_path(onnx_path, flags=[trt.OnnxParserFlag.NATIVE_INSTANCENORM]),
@@ -388,6 +398,7 @@ def build_engine(
     build_dynamic_shape: bool = False,
     build_all_tactics: bool = False,
     build_enable_refit: bool = False,
+    quant_int8_modelopt: bool = False,
     quant_int8: bool = False,
     quant_int8_calib_loader = None,
     quant_int8_calib_cache: str = '',
@@ -399,6 +410,8 @@ def build_engine(
         max_workspace_size = free_mem - activation_carveout
     else:
         max_workspace_size = 0
+    # --- Debug --- TODO
+    print(f'------> Max workspace size: {max_workspace_size}')
     engine = Engine(engine_path)
     input_profile = model_data.get_input_profile(
         opt_batch_size,
@@ -408,10 +421,8 @@ def build_engine(
         static_shape=not build_dynamic_shape,
     )
 
-    if quant_int8 == True:
-        # --- Debug --- TODO
-        print('-----> Building engine with 8-bit quantization')
-        calibrator = Calibrator(data_loader = quant_int8_calib_loader, cache = quant_int8_calib_cache)
+    if quant_int8_modelopt == True:
+        print('-----> Building engine with 8-bit INT quantization (modelopt)')
         engine.build(
             onnx_opt_path,
             fp16=False,
@@ -419,6 +430,51 @@ def build_engine(
             enable_refit=build_enable_refit,
             enable_all_tactics=build_all_tactics,
             workspace_size=max_workspace_size,
+            int8_modelopt=True,
+            int8=False
+        )
+    elif quant_int8 == True:
+        # --- Debug --- TODO
+        print('-----> Building engine with 8-bit quantization')
+        calibrator = Calibrator(data_loader = quant_int8_calib_loader, cache = quant_int8_calib_cache)
+
+        """
+        for idx, item in enumerate(quant_int8_calib_loader):
+            _dbrs0 = item['down_block_res_samples_0']
+            _dbrs1 = item['down_block_res_samples_1']
+            _dbrs2 = item['down_block_res_samples_2']
+            _dbrs3 = item['down_block_res_samples_3']
+            _dbrs4 = item['down_block_res_samples_4']
+            _dbrs5 = item['down_block_res_samples_5']
+            _dbrs6 = item['down_block_res_samples_6']
+            _dbrs7 = item['down_block_res_samples_7']
+            _dbrs8 = item['down_block_res_samples_8']
+            _dbrs9 = item['down_block_res_samples_9']
+            _dbrs10 = item['down_block_res_samples_10']
+            _dbrs11 = item['down_block_res_samples_11']
+            print(f'-- Calib item {idx}:')
+            print(f'-- \ndown_block_res_samples_0 shape: {_dbrs0.shape}')
+            print(f'-- \ndown_block_res_samples_1 shape: {_dbrs1.shape}')
+            print(f'-- \ndown_block_res_samples_2 shape: {_dbrs2.shape}')
+            print(f'-- \ndown_block_res_samples_3 shape: {_dbrs3.shape}')
+            print(f'-- \ndown_block_res_samples_4 shape: {_dbrs4.shape}')
+            print(f'-- \ndown_block_res_samples_5 shape: {_dbrs5.shape}')
+            print(f'-- \ndown_block_res_samples_6 shape: {_dbrs6.shape}')
+            print(f'-- \ndown_block_res_samples_7 shape: {_dbrs7.shape}')
+            print(f'-- \ndown_block_res_samples_8 shape: {_dbrs8.shape}')
+            print(f'-- \ndown_block_res_samples_9 shape: {_dbrs9.shape}')
+            print(f'-- \ndown_block_res_samples_10 shape: {_dbrs10.shape}')
+            print(f'-- \ndown_block_res_samples_11 shape: {_dbrs11.shape}')
+        """
+
+        engine.build(
+            onnx_opt_path,
+            fp16=False,
+            input_profile=input_profile,
+            enable_refit=build_enable_refit,
+            enable_all_tactics=build_all_tactics,
+            workspace_size=max_workspace_size,
+            int8_modelopt=False,
             int8=True,
             calibrator=calibrator
         )

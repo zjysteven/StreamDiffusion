@@ -3,6 +3,8 @@
 .vscode/
 engines*/
 output/
+unet_quant/
+*.txt
 *.csv
 *.mp4
 *.safetensors
