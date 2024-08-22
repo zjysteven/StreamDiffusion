@@ -25,6 +25,8 @@ from streamdiffusion import StreamUNetControlDiffusion
 from streamdiffusion.image_utils import postprocess_image
 from streamdiffusion.acceleration.tensorrt import accelerate_with_tensorrt_unetcontrol
 
+## ----------- Global var for video framerate (for access in textbox)
+curr_frate = 0.0
 
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEMO_DIR = os.path.join(CURRENT_DIR, "..", "demo_files")
@@ -111,6 +113,8 @@ def main(
     video_file: Optional[Union[str, None]],
     prompt: str,
 ):
+    global curr_frate 
+
     ##################################################################################################
     # video loading and preprocessing
     if video_url and video_file is not None:
@@ -129,6 +133,7 @@ def main(
             stream_mode=True, logging=False, **options
         ).start()
         print("video stream framerate: ", video_stream.framerate)
+        curr_frate = video_stream.framerate
 
         while True:
             frame = video_stream.read()
@@ -213,6 +218,8 @@ def main(
     # logger.info(f"The decoding speed is {1/(stream.inference_time_ema/frame_buffer_size):.1f} FPS")
     logger.info("=" * 50)
 
+    curr_frate = 0.0
+
 
 def play_video():
     return os.path.join(VIDEO_DIR, "output.mp4")
@@ -223,12 +230,23 @@ def calc_compression_rate():
     return f'{crate}x'
 
 
-def calc_bitrate():
+def calc_bitrate_output():
     brate = 0
     try:
         brate = int(((1/(stream.inference_time_ema/frame_buffer_size)) * size**2 * 3) // 1)
     except ZeroDivisionError:
         brate = 0.0
+    return f'{brate:,}'
+
+
+def calc_bitrate_input(prompts):
+    """
+    Rough calculation:
+
+    <incoming_video_framerate> * (<compressed_size> + <prompts_size>)
+    * Assumes that each video frame has associated prompts
+    """
+    brate = curr_frate * (len(prompts) + (64**2 * 3)) * 8
     return f'{brate:,}'
 
 
@@ -296,7 +314,8 @@ with gr.Blocks(
             )
             bitrate_box = gr.Textbox(
                 label="Bitrate (bps)", interactive=False,
-                value=calc_bitrate,
+                value=calc_bitrate_input,
+                inputs=prompt_input,
                 every=2
             )
 
