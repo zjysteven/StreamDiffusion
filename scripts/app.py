@@ -203,16 +203,18 @@ def main(
     )
 
     logger.info("Decoded video is saved!")
-    logger.info(f"The decoding speed is {1/(stream.inference_time_ema/frame_buffer_size):.1f} FPS")
+    # logger.info(f"The decoding speed is {1/(stream.inference_time_ema/frame_buffer_size):.1f} FPS")
     logger.info("=" * 50)
 
 
 def play_video():
     return os.path.join(VIDEO_DIR, "output.mp4")
 
+
 def calc_compression_rate():
     crate = (size // 64)**2
     return f'{crate}x'
+
 
 def calc_bitrate():
     brate = 0
@@ -221,6 +223,14 @@ def calc_bitrate():
     except ZeroDivisionError:
         brate = 0.0
     return f'{brate:,}'
+
+
+def calc_decoding_speed():
+    try:
+        fps = 1/(stream.inference_time_ema/frame_buffer_size)
+    except ZeroDivisionError:
+        fps = 0.0
+    return f'{fps:.1f}'
 
 
 with gr.Blocks(
@@ -284,15 +294,22 @@ with gr.Blocks(
         )
 
     with gr.Row():
+        decoding_speed_box = gr.Textbox(
+            label="Decoding Speed (FPS)", interactive=False,
+            value=calc_decoding_speed,
+            every=2
+        )
         compression_box = gr.Textbox(
             label="Compression Rate", interactive=False,
             value=calc_compression_rate,
-            every=2)
+            every=2
+        )
         bitrate_box = gr.Textbox(
             label="Bitrate (bps)", interactive=False,
             value=calc_bitrate,
-            every=2)
-
+            every=2
+        )
+        
     gr.Examples(
         [
             ["https://youtu.be/geNCpS885tg?si=B5OLbSyEzBHjShDg", "a man washing a car, cartoon, animation"],
