@@ -160,6 +160,7 @@ def main(
         fps=30
     )
 
+    original_num_batches = len(input_buffer) // frame_buffer_size
     input_buffer = input_buffer + [input_buffer[-1]] * (delay - 1) * frame_buffer_size
     num_batches = len(input_buffer) // frame_buffer_size
 
@@ -175,6 +176,7 @@ def main(
     )
 
     video_result = torch.zeros(num_frames, size, size, 3)
+    baseline_result = torch.zeros(num_frames, size, size, 3)
     # encoded_buffer = []
     frame_cnt = 0
     for i in tqdm(range(num_batches), total=num_batches):
@@ -183,6 +185,11 @@ def main(
             torch.stack(frames).permute(0, 3, 1, 2), (64, 64)
         )
         
+        if i < original_num_batches:
+            baseline_result[i*frame_buffer_size:(i+1)*frame_buffer_size] = TF.resize(
+                encoded_buffer, (size, size)
+            ).permute(0, 2, 3, 1)
+
         output_frames = stream(encoded_buffer)
 
         if i >= delay - 1:
@@ -198,7 +205,7 @@ def main(
     boundary = 0.5 * torch.ones(num_frames, size, 10, 3)
     write_video(
         os.path.join(VIDEO_DIR, "output.mp4"), 
-        torch.cat([cache_input_buffer, boundary, video_result], dim=2),
+        torch.cat([cache_input_buffer, boundary, baseline_result * 255, boundary, video_result], dim=2),
         fps=30
     )
 
@@ -276,8 +283,27 @@ with gr.Blocks(
             # height=512, width=512
         )
 
-        video_output = gr.Video(label="Video Output", autoplay=True, scale=2)
+        with gr.Column():
+            decoding_speed_box = gr.Textbox(
+                label="Decoding Speed (FPS)", interactive=False,
+                value=calc_decoding_speed,
+                every=2
+            )
+            compression_box = gr.Textbox(
+                label="Compression Rate", interactive=False,
+                value=calc_compression_rate,
+                every=2
+            )
+            bitrate_box = gr.Textbox(
+                label="Bitrate (bps)", interactive=False,
+                value=calc_bitrate,
+                every=2
+            )
+
+        # video_output = gr.Video(label="Video Output", autoplay=True, scale=2)
         # video_output.render()
+
+    video_output = gr.Video(label="Video Output", autoplay=True, scale=2)
 
     with gr.Row():
         submit_btn = gr.Button("Run", scale=1)
@@ -293,22 +319,22 @@ with gr.Blocks(
             outputs=video_output
         )
 
-    with gr.Row():
-        decoding_speed_box = gr.Textbox(
-            label="Decoding Speed (FPS)", interactive=False,
-            value=calc_decoding_speed,
-            every=2
-        )
-        compression_box = gr.Textbox(
-            label="Compression Rate", interactive=False,
-            value=calc_compression_rate,
-            every=2
-        )
-        bitrate_box = gr.Textbox(
-            label="Bitrate (bps)", interactive=False,
-            value=calc_bitrate,
-            every=2
-        )
+    # with gr.Row():
+    #     decoding_speed_box = gr.Textbox(
+    #         label="Decoding Speed (FPS)", interactive=False,
+    #         value=calc_decoding_speed,
+    #         every=2
+    #     )
+    #     compression_box = gr.Textbox(
+    #         label="Compression Rate", interactive=False,
+    #         value=calc_compression_rate,
+    #         every=2
+    #     )
+    #     bitrate_box = gr.Textbox(
+    #         label="Bitrate (bps)", interactive=False,
+    #         value=calc_bitrate,
+    #         every=2
+    #     )
         
     gr.Examples(
         [
