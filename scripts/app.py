@@ -247,7 +247,7 @@ def calc_bitrate_input(prompts):
     * Assumes that each video frame has associated prompts
     """
     brate = curr_frate * (len(prompts) + (64**2 * 3)) * 8
-    return f'{brate:,}'
+    return f'{brate:,.2f}'
 
 
 def calc_decoding_speed():
@@ -366,6 +366,10 @@ with gr.Blocks(
         [
             [f"{DEMO_DIR}/video_inputs/riding_in_busy_street_pov_realistic.mp4", "riding in busy street, pov, realistic"],
             [f"{DEMO_DIR}/video_inputs/riding_on_a_brigde_pov_realistic.mp4", "riding on a brigde, pov, realistic"],
+            [f"{DEMO_DIR}/video_inputs/soldier_desert_firing.mp4", "desert, gun, shooting"],
+            [f"{DEMO_DIR}/video_inputs/soldier_grenade_test.mp4", "desert, running with gun, realistic, high quality"],
+            [f"{DEMO_DIR}/video_inputs/ukraine_soldier_shot.mp4", "realistic, soldier, combat"],
+            [f"{DEMO_DIR}/video_inputs/powerline.mp4", "nature, grass, realistic, high quality, blue sky, power line"]
         ],
         [video_file, prompt_input]
     )
