@@ -31,8 +31,8 @@ curr_frate = 0.0
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 DEMO_DIR = os.path.join(CURRENT_DIR, "..", "demo_files")
 VIDEO_DIR = os.path.join(DEMO_DIR, "video_outputs")
-if os.path.isfile(os.path.join(VIDEO_DIR, "output.mp4")):
-    os.remove(os.path.join(VIDEO_DIR, "output.mp4"))
+# if os.path.isfile(os.path.join(VIDEO_DIR, "output.mp4")):
+#     os.remove(os.path.join(VIDEO_DIR, "output.mp4"))
 os.makedirs(VIDEO_DIR, exist_ok=True)
 
 log_file = os.path.join(DEMO_DIR, "log.txt")
@@ -107,19 +107,23 @@ if accel == 'trt':
 logging.info("Model has been successfully loaded!")
 ##########################################################################
 
+video_name = None
 
 def main(
     video_url: Optional[Union[str, None]],
     video_file: Optional[Union[str, None]],
     prompt: str,
 ):
-    global curr_frate 
+    global curr_frate
+    global video_name
 
     ##################################################################################################
     # video loading and preprocessing
     if video_url and video_file is not None:
         logging.error("Please provide a single input via either `Video URL' or `Video'!")
         yield None
+
+    video_name = video_file.split('/')[-1]
 
     input_buffer = []
     if video_url:
@@ -142,6 +146,7 @@ def main(
             input_buffer.append(torch.from_numpy(frame) / 255)
         video_stream.stop()
     else:
+        curr_frate = 30
         video_input = read_video(video_file)
         video = video_input[0] / 255
         input_buffer.extend(list(video))
@@ -182,6 +187,7 @@ def main(
 
     video_result = torch.zeros(num_frames, size, size, 3)
     baseline_result = torch.zeros(num_frames, size, size, 3)
+    baseline_result_original_size = torch.zeros(num_frames, size, size, 3)
     # encoded_buffer = []
     frame_cnt = 0
     for i in tqdm(range(num_batches), total=num_batches):
@@ -191,7 +197,12 @@ def main(
         )
         
         if i < original_num_batches:
-            baseline_result[i*frame_buffer_size:(i+1)*frame_buffer_size] = TF.resize(
+            baseline_result[
+                i*frame_buffer_size:(i+1)*frame_buffer_size, 
+                size // 2 - 32:size // 2 + 32,
+                size // 2 - 32:size // 2 + 32
+            ] = encoded_buffer.permute(0, 2, 3, 1)
+            baseline_result_original_size[i*frame_buffer_size:(i+1)*frame_buffer_size] = TF.resize(
                 encoded_buffer, (size, size)
             ).permute(0, 2, 3, 1)
 
@@ -208,9 +219,22 @@ def main(
                 
     video_result = video_result * 255
     boundary = 0.5 * torch.ones(num_frames, size, 10, 3)
+    # write_video(
+    #     os.path.join(VIDEO_DIR, video_name), 
+    #     torch.cat([cache_input_buffer, boundary, baseline_result * 255, boundary, video_result], dim=2),
+    #     fps=30
+    # )
     write_video(
-        os.path.join(VIDEO_DIR, "output.mp4"), 
-        torch.cat([cache_input_buffer, boundary, baseline_result * 255, boundary, video_result], dim=2),
+        os.path.join(VIDEO_DIR, video_name),
+        torch.cat([
+            cache_input_buffer,
+            boundary,
+            baseline_result * 255,
+            boundary,
+            baseline_result_original_size * 255,
+            boundary,
+            video_result
+        ], dim=2),
         fps=30
     )
 
@@ -218,11 +242,12 @@ def main(
     # logger.info(f"The decoding speed is {1/(stream.inference_time_ema/frame_buffer_size):.1f} FPS")
     logger.info("=" * 50)
 
-    curr_frate = 0.0
+    # curr_frate = 0.0
 
 
 def play_video():
-    return os.path.join(VIDEO_DIR, "output.mp4")
+    global video_name
+    return os.path.join(VIDEO_DIR, video_name)
 
 
 def calc_compression_rate():
@@ -318,25 +343,24 @@ with gr.Blocks(
                 inputs=prompt_input,
                 every=2
             )
+            submit_btn = gr.Button("Run", scale=1)
 
         # video_output = gr.Video(label="Video Output", autoplay=True, scale=2)
         # video_output.render()
 
     video_output = gr.Video(label="Video Output", autoplay=True, scale=2)
+    play_btn = gr.Button("Play Decoded Video")
 
-    with gr.Row():
-        submit_btn = gr.Button("Run", scale=1)
-        submit_btn.click(
-            fn=main, 
-            inputs=[video_url, video_file, prompt_input], 
-            outputs=real_time_output
-        )
+    submit_btn.click(
+        fn=main, 
+        inputs=[video_url, video_file, prompt_input], 
+        outputs=real_time_output
+    )
 
-        play_btn = gr.Button("Play Decoded Video", scale=1)
-        play_btn.click(
-            fn=play_video,
-            outputs=video_output
-        )
+    play_btn.click(
+        fn=play_video,
+        outputs=video_output
+    )
 
     # with gr.Row():
     #     decoding_speed_box = gr.Textbox(
@@ -355,13 +379,13 @@ with gr.Blocks(
     #         every=2
     #     )
         
-    gr.Examples(
-        [
-            ["https://youtu.be/geNCpS885tg?si=B5OLbSyEzBHjShDg", "a man washing a car, cartoon, animation"],
-            ["https://youtu.be/xuP4g7IDgDM?si=LYOt1xmuOrGvOMUB", "stunning sunset seen from the sea, realistic, natural"],
-        ],
-        [video_url, prompt_input],
-    )
+    # gr.Examples(
+    #     [
+    #         ["https://youtu.be/geNCpS885tg?si=B5OLbSyEzBHjShDg", "a man washing a car, cartoon, animation"],
+    #         ["https://youtu.be/xuP4g7IDgDM?si=LYOt1xmuOrGvOMUB", "stunning sunset seen from the sea, realistic, natural"],
+    #     ],
+    #     [video_url, prompt_input],
+    # )
     gr.Examples(
         [
             [f"{DEMO_DIR}/video_inputs/riding_in_busy_street_pov_realistic.mp4", "riding in busy street, pov, realistic"],
@@ -369,7 +393,18 @@ with gr.Blocks(
             [f"{DEMO_DIR}/video_inputs/soldier_desert_firing.mp4", "desert, gun, shooting"],
             [f"{DEMO_DIR}/video_inputs/soldier_grenade_test.mp4", "desert, running with gun, realistic, high quality"],
             [f"{DEMO_DIR}/video_inputs/ukraine_soldier_shot.mp4", "realistic, soldier, combat"],
-            [f"{DEMO_DIR}/video_inputs/powerline.mp4", "nature, grass, realistic, high quality, blue sky, power line"]
+            [f"{DEMO_DIR}/video_inputs/powerline.mp4", "nature, grass, realistic, high quality, blue sky, power line"],
+            [f"{DEMO_DIR}/video_inputs/dance_1.mp4", "a woman and a man dancing, realistic, high quality"],
+            [f"{DEMO_DIR}/video_inputs/dance_2.mp4", "a boy and a young man dancing, realistic, 4k, high quality"],
+            [f"{DEMO_DIR}/video_inputs/dance_3.mp4", "six killing photo poses, realistic, high quality, Canon5D, 8k"],
+            [f"{DEMO_DIR}/video_inputs/assembly_1.mp4", "assembly line, factory, realistic, high quality"],
+            [f"{DEMO_DIR}/video_inputs/assembly_2.mp4", "assembly line, factory, realistic, high quality, 4k"],
+            [f"{DEMO_DIR}/video_inputs/assembly_3.mp4", "assembly line, factory, realistic, high quality, 4k, Canon5D"],
+            [f"{DEMO_DIR}/video_inputs/assembly_4.mp4", "assembly line, factory, realistic, high quality, 4k, Canon5D"],
+            [f"{DEMO_DIR}/video_inputs/dashcam.mp4", "driving on a highway, dashcam, pov, realistic, high quality, extreme details"],
+            [f"{DEMO_DIR}/video_inputs/dji-drone.mp4", "drone view of countryside, birdeye view, realistic, high quality, 4k"],
+            # [f"{DEMO_DIR}/video_inputs/drone_new_clip.mp4", "drone view of green mountain, birdeye view, realistic, high quality, 4k"],
+            [f"{DEMO_DIR}/video_inputs/train.mp4", "railway at night, realistic, high quality"],
         ],
         [video_file, prompt_input]
     )
