@@ -9,6 +9,8 @@ import logging
 logging.getLogger('gradio').setLevel(logging.ERROR)
 logging.getLogger('gradio_log').setLevel(logging.ERROR)
 
+import cv2
+import numpy as np
 import torch
 from torchvision.io import read_video, write_video
 from torchvision.transforms import functional as TF
@@ -117,6 +119,10 @@ def main(
     global curr_frate
     global video_name
 
+    stream_as_mp4 = True
+    # cv2.VideoWriter_fourcc(*"mp4v")
+    video_codec = cv2.VideoWriter_fourcc(*"mp4v") if stream_as_mp4 else cv2.VideoWriter_fourcc(*"x264") # type: ignore
+
     ##################################################################################################
     # video loading and preprocessing
     if video_url and video_file is not None:
@@ -157,18 +163,18 @@ def main(
     input_buffer = input_buffer[:(len(input_buffer) // frame_buffer_size) * frame_buffer_size]
     num_frames = len(input_buffer)
     print("num_frames: ", num_frames)
-    for i in range(num_frames):
-        input_buffer[i] = TF.resize(
-            input_buffer[i].permute(2, 0, 1), (size, size)
-        ).permute(1, 2, 0)
+    # for i in range(num_frames):
+    #     input_buffer[i] = TF.resize(
+    #         input_buffer[i].permute(2, 0, 1), (size, size)
+    #     ).permute(1, 2, 0)
     
     # for display purpose
     cache_input_buffer = torch.stack(input_buffer) * 255
-    write_video(
-        os.path.join(VIDEO_DIR, "input.mp4"), 
-        cache_input_buffer,
-        fps=30
-    )
+    # write_video(
+    #     os.path.join(VIDEO_DIR, "input", video_name), 
+    #     cache_input_buffer,
+    #     fps=30
+    # )
 
     original_num_batches = len(input_buffer) // frame_buffer_size
     input_buffer = input_buffer + [input_buffer[-1]] * (delay - 1) * frame_buffer_size
@@ -185,11 +191,17 @@ def main(
         guidance_scale=1.0
     )
 
+    n_chunks = 0
+    fps = 30
+    name = os.path.join(VIDEO_DIR, f"output_{n_chunks}{'.mp4' if stream_as_mp4 else '.ts'}")
+    names = [name]
+    segment_file = cv2.VideoWriter(name, video_codec, fps, (size, size)) # type: ignore
+
     video_result = torch.zeros(num_frames, size, size, 3)
     baseline_result = torch.zeros(num_frames, size, size, 3)
     baseline_result_original_size = torch.zeros(num_frames, size, size, 3)
-    # encoded_buffer = []
     frame_cnt = 0
+
     for i in tqdm(range(num_batches), total=num_batches):
         frames = input_buffer[i*frame_buffer_size:(i+1)*frame_buffer_size]
         encoded_buffer = TF.resize(
@@ -214,16 +226,28 @@ def main(
                     output_frames[j].permute(1, 2, 0),
                     output_type="pt"
                 )
-                yield TF.to_pil_image(video_result[frame_cnt].permute(2, 0, 1))
+                # yield TF.to_pil_image(video_result[frame_cnt].permute(2, 0, 1))
+                # frame_cnt += 1
+
+                segment_file.write(
+                    cv2.cvtColor(
+                        np.array(TF.to_pil_image(video_result[frame_cnt].permute(2, 0, 1))),
+                        cv2.COLOR_BGR2RGB
+                    )
+                )
                 frame_cnt += 1
+
+            n_chunks += 1
+            segment_file.release()
+            names.append(name)
+            if len(names) > 1:
+                yield names[-1]
+            name = os.path.join(VIDEO_DIR, f"output_{n_chunks}{'.mp4' if stream_as_mp4 else '.ts'}")
+            segment_file = cv2.VideoWriter(name, video_codec, fps, (size, size)) # type: ignore
                 
     video_result = video_result * 255
     boundary = 0.5 * torch.ones(num_frames, size, 10, 3)
-    # write_video(
-    #     os.path.join(VIDEO_DIR, video_name), 
-    #     torch.cat([cache_input_buffer, boundary, baseline_result * 255, boundary, video_result], dim=2),
-    #     fps=30
-    # )
+
     write_video(
         os.path.join(VIDEO_DIR, video_name),
         torch.cat([
@@ -321,9 +345,15 @@ with gr.Blocks(
             mirror_webcam=False
         )
 
-        real_time_output = gr.Image(
-            label="Real-Time Frame Output", scale=1
-            # height=512, width=512
+        # real_time_output = gr.Image(
+        #     label="Real-Time Frame Output", scale=1
+        #     # height=512, width=512
+        # )
+        real_time_output = gr.Video(
+            label="Real-Time Decoding Output", 
+            streaming=True, 
+            autoplay=True, 
+            elem_id="stream_video_output"
         )
 
         with gr.Column():
@@ -393,7 +423,7 @@ with gr.Blocks(
             [f"{DEMO_DIR}/video_inputs/soldier_desert_firing.mp4", "desert, gun, shooting"],
             [f"{DEMO_DIR}/video_inputs/soldier_grenade_test.mp4", "desert, running with gun, realistic, high quality"],
             [f"{DEMO_DIR}/video_inputs/ukraine_soldier_shot.mp4", "realistic, soldier, combat"],
-            [f"{DEMO_DIR}/video_inputs/powerline.mp4", "nature, grass, realistic, high quality, blue sky, power line"],
+            [f"{DEMO_DIR}/video_inputs/powerline_short.mp4", "nature, grass, realistic, high quality, blue sky, power line"],
             [f"{DEMO_DIR}/video_inputs/dance_1.mp4", "a woman and a man dancing, realistic, high quality"],
             [f"{DEMO_DIR}/video_inputs/dance_2.mp4", "a boy and a young man dancing, realistic, 4k, high quality"],
             [f"{DEMO_DIR}/video_inputs/dance_3.mp4", "six killing photo poses, realistic, high quality, Canon5D, 8k"],
@@ -404,6 +434,10 @@ with gr.Blocks(
             [f"{DEMO_DIR}/video_inputs/dashcam.mp4", "driving on a highway, dashcam, pov, realistic, high quality, extreme details"],
             [f"{DEMO_DIR}/video_inputs/dji-drone.mp4", "drone view of countryside, birdeye view, realistic, high quality, 4k"],
             # [f"{DEMO_DIR}/video_inputs/drone_new_clip.mp4", "drone view of green mountain, birdeye view, realistic, high quality, 4k"],
+            [f"{DEMO_DIR}/video_inputs/drone_beach_1.mp4", "drone view of beach, birdeye view, realistic, high quality, 4k"],
+            [f"{DEMO_DIR}/video_inputs/drone_beach_2.mp4", "drone view of beach, birdeye view, realistic, high quality, 4k"],
+            [f"{DEMO_DIR}/video_inputs/drone_lighthouse.mp4", "drone view of lighthouse, birdeye view, realistic, high quality, 4k"],
+            [f"{DEMO_DIR}/video_inputs/drone_milkyway.mp4", "drone view of milkway, realistic, high quality, 4k"],
             [f"{DEMO_DIR}/video_inputs/train.mp4", "railway at night, realistic, high quality"],
         ],
         [video_file, prompt_input]
@@ -411,4 +445,4 @@ with gr.Blocks(
 
     Log(log_file, dark=True, xterm_font_size=16, elem_id="gradio-log-comp-id")
 
-demo.launch(share=True)
+demo.launch(share=False)
